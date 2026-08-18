@@ -11,6 +11,7 @@ type Value []byte
 // Op is the kind of mutation a Command performs.
 type Op uint8
 
+// Supported mutation operations.
 const (
 	OpPut Op = iota + 1
 	OpDelete
