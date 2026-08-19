@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 1 · Foundation — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 1</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-1">
+        <p class="eyebrow">CHAPTER 1</p>
+        <h2 class="chapter-title">Foundation &amp; Scaffolding <span class="pill done">COMPLETE</span></h2>
+        <p class="lead">
+          Establish the module, the package boundaries, the shared vocabulary, and the
+          tooling and CI that keep every later change honest.
+        </p>
+
+        <h3 id="c1-goals">Goals &amp; Scope</h3>
+        <p>
+          Before any behavior, the project needs a skeleton that compiles, a clear place
+          for each concern to live, and automated checks so regressions are caught on
+          every commit. Nothing in this chapter has runtime logic — it is the frame the
+          rest of the system is built inside.
+        </p>
+
+        <h3 id="c1-layout">Module &amp; Layout</h3>
+        <p>
+          The module is <code>github.com/0xnikshi/keva</code>. Runnable binaries live
+          under <code>cmd/</code>; importable logic lives under <code>internal/</code>,
+          which the Go compiler forbids any outside module from importing.
+        </p>
+        <pre><code>cmd/
+  keva/        client CLI          (package main)
+  kevad/       server daemon       (package main)
+internal/
+  keva/        core domain types
+  store/       storage engine      (Chapter 2)
+  raft/        consensus           (later)
+  server/      network layer       (later)
+  cluster/     membership          (later)</code></pre>
+        <p>
+          Dependencies point inward: binaries depend on internal packages, never the
+          reverse. Each still-empty package carries a <code>doc.go</code> so it is a real,
+          compilable unit from day one.
+        </p>
+
+        <h3 id="c1-types">Domain Types</h3>
+        <p>
+          One tiny package, <code>internal/keva</code>, holds the vocabulary shared across
+          the whole system — deliberately free of behavior so every other package can
+          depend on it without pulling in logic.
+        </p>
+        <pre><code>type Key   string
+type Value []byte
+type Op    uint8
+
+const (
+    OpPut Op = iota + 1   // zero value stays invalid
+    OpDelete
+)
+
+type Command struct { Op Op; Key Key; Value Value }   // replicated by Raft
+type Entry   struct { Term, Index uint64; Command Command } // a Raft log record</code></pre>
+        <ul>
+          <li><b>Named types</b> (<code>Key</code>, <code>Value</code>) over bare
+            primitives so the compiler distinguishes them in signatures.</li>
+          <li><b><code>iota + 1</code></b> keeps the zero <code>Op</code> invalid — an
+            unset operation is detectable, not silently a "Put".</li>
+          <li><b>Composition</b>: an <code>Entry</code> contains a <code>Command</code>;
+            Go favors this over inheritance.</li>
+        </ul>
+
+        <h3 id="c1-tooling">Tooling &amp; CI</h3>
+        <table>
+          <thead><tr><th>Artifact</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>Makefile</code></td><td>One-word tasks: build, test, test-race, vet, fmt, lint, cover.</td></tr>
+            <tr><td><code>.golangci.yml</code></td><td>golangci-lint v2 with revive, staticcheck, errcheck, and more.</td></tr>
+            <tr><td><code>.editorconfig</code></td><td>Consistent tabs / LF / final newline across editors.</td></tr>
+            <tr><td><code>.github/workflows/ci.yml</code></td><td>On every push/PR: parallel <code>test</code> and <code>lint</code> jobs.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          CI reads the Go version from <code>go.mod</code> (one source of truth) and runs
+          the race detector. Build artifacts go to <code>bin/</code>, which is gitignored.
+        </p>
+
+        <h3 id="c1-decisions">Key Decisions</h3>
+        <div class="callout">
+          <span class="k">Two binaries, not one.</span> A daemon (<code>kevad</code>) and a
+          separate client (<code>keva</code>), etcd-style — the operational surface and the
+          user surface evolve independently.
+        </div>
+        <div class="callout">
+          <span class="k">Lint findings are signal.</span> When revive required doc comments
+          on exported symbols, the fix was to document the API, not silence the rule. Public
+          identifiers carry real semantic docs that render on pkg.go.dev.
+        </div>
+
+        <div class="page-nav">
+          <a href="../index.html"><span class="nav-dir">← Back</span>Overview</a>
+          <a class="next" href="chapter2.html"><span class="nav-dir">Next →</span>Ch. 2 — Storage Engine</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>

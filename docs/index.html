@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Keva · Design Docs</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="overview">
+        <p class="eyebrow">DESIGN NOTES</p>
+        <h2 class="chapter-title">Keva — a distributed key-value store</h2>
+        <p class="lead">
+          Keva is a strongly consistent, distributed key-value store written in Go,
+          replicated with the Raft consensus algorithm. These docs record the design
+          decisions chapter by chapter, as the system is built from the ground up.
+        </p>
+        <p>
+          The build order is deliberate: make each layer <em>correct in isolation</em>
+          before adding the next. Storage is proven in memory behind an interface, then
+          made durable, then replicated. Each chapter maps to a phase of that build.
+        </p>
+
+        <div class="cards">
+          <a class="card" href="chapters/chapter1.html">
+            <span class="card-eyebrow">CHAPTER 1 · <span class="pill done">COMPLETE</span></span>
+            <h3>Foundation &amp; Scaffolding</h3>
+            <p>Module, package layout, domain types, tooling, and CI.</p>
+          </a>
+          <a class="card" href="chapters/chapter2.html">
+            <span class="card-eyebrow">CHAPTER 2 · <span class="pill wip">IN PROGRESS</span></span>
+            <h3>Storage Engine</h3>
+            <p>Interface, in-memory store, and the write-ahead log.</p>
+          </a>
+        </div>
+
+        <h3>How to read these docs</h3>
+        <p>
+          Use the sidebar to jump between chapters and sections. Each chapter is a
+          standalone page; the chapter you are viewing expands in the sidebar, and you can
+          collapse any chapter you are done with.
+        </p>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="script.js"></script>
+</body>
+</html>

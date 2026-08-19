@@ -35,3 +35,6 @@ go.work.sum
 /bin/
 /kevad
 /keva
+
+# macOS
+.DS_Store

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 2 · Storage Engine — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 2</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-2">
+        <p class="eyebrow">CHAPTER 2</p>
+        <h2 class="chapter-title">Storage Engine <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          A durable, crash-recoverable key-value engine — built correct in memory first,
+          behind an interface, then made persistent with a write-ahead log.
+        </p>
+
+        <h3 id="c2-approach">Approach</h3>
+        <p>
+          The guiding principle: get the semantics right in memory behind a clean
+          interface, then add durability <em>underneath</em> without changing callers.
+          That interface is what later lets Raft depend on "a store" while staying ignorant
+          of how bytes reach disk.
+        </p>
+
+        <h3 id="c2-interface">Store Interface</h3>
+        <p>
+          Every implementation satisfies one contract. <code>Get</code> reports a missing
+          key with the sentinel <code>ErrNotFound</code>; the error return leaves room for
+          disk-backed engines to surface I/O failures through the same signature.
+        </p>
+        <pre><code>type Store interface {
+    Get(key keva.Key) (keva.Value, error)
+    Put(key keva.Key, value keva.Value) error
+    Delete(key keva.Key) error
+}
+
+var ErrNotFound = errors.New("store: key not found")</code></pre>
+
+        <h3 id="c2-memory">In-Memory Store</h3>
+        <p>
+          A map guarded by a <code>sync.RWMutex</code> — many concurrent readers or one
+          writer. Two correctness details matter:
+        </p>
+        <ul>
+          <li><b>Defensive copies.</b> Because <code>Value</code> is <code>[]byte</code>,
+            the store copies on <code>Put</code> and <code>Get</code> so callers cannot
+            mutate stored data through a slice they still hold.</li>
+          <li><b>Compile-time interface check.</b> <code>var _ Store = (*Memory)(nil)</code>
+            fails the build the instant <code>Memory</code> stops satisfying
+            <code>Store</code>.</li>
+        </ul>
+        <pre><code>type Memory struct {
+    mu   sync.RWMutex
+    data map[keva.Key]keva.Value
+}
+
+var _ Store = (*Memory)(nil)</code></pre>
+
+        <h3 id="c2-wal">Write-Ahead Log</h3>
+        <p>
+          Durability comes from a <b>write-ahead log</b>: before a mutation touches memory,
+          a record of it is appended to a file and flushed to stable storage. After a crash,
+          replaying the log rebuilds exact state.
+        </p>
+        <div class="callout">
+          <span class="k">fsync vs flush.</span> <code>bufio.Flush()</code> pushes bytes from
+          the process into the OS; <code>File.Sync()</code> (fsync) forces the OS to persist
+          to the physical disk. Only after fsync does a write survive power loss — so
+          <code>Append</code> does both. The cost of that safety (a slow fsync per append) is
+          a throughput trade-off revisited in the performance phase.
+        </div>
+
+        <h3 id="c2-format">Record Format</h3>
+        <p>
+          Each record is framed with a length and a CRC32 checksum, so partial or corrupted
+          records are detectable on replay.
+        </p>
+        <pre class="diagram"><code>┌──────────┬──────────┬───────────────────────────────────────────┐
+│ uint32   │ uint32   │ payload                                     │
+│ length   │ crc32    │  op(1) · keyLen(4) · key · valLen(4) · val  │
+└──────────┴──────────┴───────────────────────────────────────────┘
+  └──────── 8-byte header ────────┘  read exactly one record at a time</code></pre>
+        <div class="fields">
+          <span class="field"><b>length</b> payload size</span>
+          <span class="field"><b>crc32</b> integrity check</span>
+          <span class="field"><b>op</b> Put / Delete</span>
+          <span class="field"><b>keyLen · key</b></span>
+          <span class="field"><b>valLen · val</b></span>
+        </div>
+        <ul>
+          <li><b>Big-endian</b> field encoding — stable across machines, ready for Raft to
+            ship records between nodes.</li>
+          <li><b>CRC on replay</b> catches silent bit-rot: a single flipped byte fails the
+            checksum.</li>
+          <li><b>Torn-tail tolerance</b>: a crash mid-append leaves a short record at the
+            end; replay reads every complete record and stops cleanly rather than erroring.</li>
+        </ul>
+
+        <h3 id="c2-testing">Testing</h3>
+        <p>
+          Tests target the interesting failure modes, not just the happy path — each using
+          <code>t.TempDir()</code> for a hermetic, auto-cleaned filesystem.
+        </p>
+        <table>
+          <thead><tr><th>Test</th><th>Proves</th></tr></thead>
+          <tbody>
+            <tr><td>Put / Get / Delete / overwrite</td><td>core map semantics</td></tr>
+            <tr><td>does-not-alias-caller-slices</td><td>defensive copying holds</td></tr>
+            <tr><td>append &amp; replay</td><td>records round-trip through the file</td></tr>
+            <tr><td>tolerates torn tail</td><td>crash mid-write loses only the partial record</td></tr>
+            <tr><td>detects corruption</td><td>CRC catches a flipped byte</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <span class="k">Next.</span> Crash recovery — a <code>Durable</code> store wrapping
+          <code>Memory</code> + <code>WAL</code> that replays the log on open, proven by a
+          write → "restart" → read-back test.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter1.html"><span class="nav-dir">← Previous</span>Ch. 1 — Foundation</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>
