@@ -1,10 +1,17 @@
 package store
 
-import "github.com/0xnikshi/keva/internal/keva"
+import (
+	"sync"
+
+	"github.com/0xnikshi/keva/internal/keva"
+)
 
 // Durable is a Store that persists every mutation to a write-ahead log
 // and rebuilds its in-memory state by replaying that log on open.
 type Durable struct {
+	// mu serializes writes and compaction so that the order commands are
+	// appended to the log is exactly the order they are applied to memory.
+	mu  sync.Mutex
 	mem *Memory
 	wal *WAL
 }
@@ -41,6 +48,9 @@ func (d *Durable) Get(key keva.Key) (keva.Value, error) {
 // Put appends the write to the log, then applies it in memory. The log
 // append is durable before the value becomes visible.
 func (d *Durable) Put(key keva.Key, value keva.Value) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	cmd := keva.Command{Op: keva.OpPut, Key: key, Value: value}
 	if err := d.wal.Append(cmd); err != nil {
 		return err
@@ -51,12 +61,26 @@ func (d *Durable) Put(key keva.Key, value keva.Value) error {
 
 // Delete appends the deletion to the log, then applies it in memory.
 func (d *Durable) Delete(key keva.Key) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	cmd := keva.Command{Op: keva.OpDelete, Key: key}
 	if err := d.wal.Append(cmd); err != nil {
 		return err
 	}
 	applyCommand(d.mem, cmd)
 	return nil
+}
+
+// Compact rewrites the log to the minimal set of writes that reproduce
+// current state, discarding overwritten and deleted history. It holds the
+// write lock, so the snapshot it takes is consistent and no write is lost
+// across the log swap.
+func (d *Durable) Compact() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.wal.rewrite(d.mem.snapshot())
 }
 
 // Close closes the underlying write-ahead log.

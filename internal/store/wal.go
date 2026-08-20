@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/0xnikshi/keva/internal/keva"
@@ -23,9 +24,10 @@ var errCorruptRecord = errors.New("store: corrupt WAL record")
 // WAL is an append-only, crash-recoverable log of commands. Each Append
 // is framed with a length and CRC and flushed to stable storage.
 type WAL struct {
-	mu sync.Mutex
-	f  *os.File
-	w  *bufio.Writer
+	mu   sync.Mutex
+	path string
+	f    *os.File
+	w    *bufio.Writer
 }
 
 // OpenWAL opens (creating if needed) the write-ahead log at path for
@@ -35,7 +37,7 @@ func OpenWAL(path string) (*WAL, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WAL{f: f, w: bufio.NewWriter(f)}, nil
+	return &WAL{path: path, f: f, w: bufio.NewWriter(f)}, nil
 }
 
 // Append writes cmd to the log and flushes it to stable storage before
@@ -65,6 +67,72 @@ func (w *WAL) Close() error {
 		return err
 	}
 	return w.f.Close()
+}
+
+// rewrite atomically replaces the log's contents with cmds, then reopens
+// it for appending. It writes a temp file, fsyncs it, renames it over the
+// live path, and fsyncs the directory — so a crash during compaction
+// leaves either the old complete log or the new one, never a partial file.
+func (w *WAL) rewrite(cmds []keva.Command) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	tmp := w.path + ".compact"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+
+	bw := bufio.NewWriter(f)
+	for _, cmd := range cmds {
+		if _, err := bw.Write(encodeRecord(cmd)); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
+	if err := bw.Flush(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	// The atomic swap: rename replaces the log in a single step, and the
+	// directory fsync makes that rename itself durable.
+	if err := os.Rename(tmp, w.path); err != nil {
+		return err
+	}
+	if err := syncDir(w.path); err != nil {
+		return err
+	}
+
+	// Reopen the freshly compacted file for subsequent appends.
+	if err := w.f.Close(); err != nil {
+		return err
+	}
+	nf, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	w.f = nf
+	w.w = bufio.NewWriter(nf)
+	return nil
+}
+
+// syncDir fsyncs the directory containing path, making a rename within it
+// durable across a crash.
+func syncDir(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 // ReadAll replays the log at path, returning its commands in order. A

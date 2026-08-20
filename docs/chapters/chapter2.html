@@ -261,6 +261,54 @@ applyCommand(d.mem, cmd)</code></pre>
           enough to rebuild state.
         </div>
 
+        <h3 id="c2-compaction">Compaction</h3>
+        <p>
+          The append-only log grows without bound — five hundred writes to one key leave
+          five hundred records, and deleted keys keep their history. Compaction rewrites the
+          log to the minimal set of writes that reproduce current state.
+        </p>
+        <p>
+          The insight: a snapshot of live state <em>is</em> a valid, minimal log. Capturing
+          one Put per live key — no overwrites, no deletes — produces a log that replays to
+          identical state at a fraction of the size.
+        </p>
+
+        <h4>The atomic swap</h4>
+        <p>
+          The live log cannot simply be truncated and rewritten in place — a crash
+          mid-rewrite would destroy everything. Instead the compacted log is written to a
+          temporary file and swapped in atomically.
+        </p>
+        <pre><code>1. write records to a temp file      state.wal.compact
+2. fsync the temp file               its contents are durable
+3. rename temp → live path           atomic: a single step
+4. fsync the directory               the rename itself is durable</code></pre>
+        <p>
+          <code>rename</code> is atomic on a POSIX filesystem: a crash leaves either the old
+          complete log or the new one, never a partial mix. The directory fsync is the detail
+          that is easy to miss — a rename updates a directory entry, and that update must be
+          flushed for the swap to survive power loss.
+        </p>
+        <div class="callout">
+          <span class="k">Same idea, one level up.</span> This is the storage-engine cousin of
+          Raft snapshotting: a lagging follower receives a compacted snapshot instead of the
+          entire log, and that snapshot is persisted with the same temp-write-then-rename
+          technique.
+        </div>
+
+        <h4>An ordering invariant, and the limits of -race</h4>
+        <p>
+          Compaction and every write take a single lock, so that <b>the order commands are
+          appended to the log is exactly the order they are applied to memory.</b> Without it,
+          two concurrent writes to the same key could be logged in one order but applied in
+          another — leaving live state and recovered state silently disagreeing.
+        </p>
+        <div class="callout">
+          <span class="k">Note.</span> The race detector does not catch this: the map and the
+          log are each mutex-guarded, so there is no data race — only a higher-level ordering
+          invariant that must be reasoned about, not tooled away.
+        </div>
+
         <h3 id="c2-testing">Testing</h3>
         <p>
           Tests target the interesting failure modes, not just the happy path — each using
@@ -277,12 +325,14 @@ applyCommand(d.mem, cmd)</code></pre>
             <tr><td>persists across reopen</td><td>a fresh instance recovers state from the log</td></tr>
             <tr><td>recovers without close</td><td>fsync'd writes survive a crash with no clean shutdown</td></tr>
             <tr><td>replay reflects last write</td><td>ordering holds — the newest value wins</td></tr>
+            <tr><td>compaction shrinks log</td><td>redundant history discarded, state preserved</td></tr>
+            <tr><td>writes after compaction durable</td><td>appends to the new log are recovered</td></tr>
           </tbody>
         </table>
         <div class="callout">
-          <span class="k">Next.</span> On-disk structure and compaction — the append-only log
-          grows without bound, so periodic snapshots will let recovery load a checkpoint and
-          replay only the tail.
+          <span class="k">Next.</span> Property-based and fuzz testing — randomized operation
+          sequences and malformed record bytes to surface edge cases beyond the hand-written
+          tests.
         </div>
 
         <div class="page-nav">

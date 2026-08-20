@@ -55,6 +55,19 @@ func (m *Memory) Delete(key keva.Key) error {
 // none, so this is a no-op.
 func (m *Memory) Close() error { return nil }
 
+// snapshot returns a Put command for every live key, capturing current
+// state. Compaction uses it to rewrite the log to its minimal form.
+func (m *Memory) snapshot() []keva.Command {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	cmds := make([]keva.Command, 0, len(m.data))
+	for k, v := range m.data {
+		cmds = append(cmds, keva.Command{Op: keva.OpPut, Key: k, Value: cloneValue(v)})
+	}
+	return cmds
+}
+
 // cloneValue returns an independent copy of v so that data held in the
 // store cannot be mutated through a slice the caller still references.
 func cloneValue(v keva.Value) keva.Value {
