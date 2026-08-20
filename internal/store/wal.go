@@ -17,6 +17,10 @@ import (
 // payload length followed by a uint32 CRC32 of the payload.
 const recordHeaderSize = 8
 
+// maxRecordSize caps a single record's payload. It guards replay against a
+// corrupt length prefix that would otherwise drive a huge allocation.
+const maxRecordSize = 64 << 20 // 64 MiB
+
 // errCorruptRecord is returned during replay when a record's checksum
 // does not match its payload.
 var errCorruptRecord = errors.New("store: corrupt WAL record")
@@ -149,7 +153,13 @@ func ReadAll(path string) ([]keva.Command, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	r := bufio.NewReader(f)
+	return readRecords(bufio.NewReader(f))
+}
+
+// readRecords decodes framed records from r until EOF or a torn tail. It
+// is separated from ReadAll so the decode path can be exercised directly
+// by fuzzing, without touching the filesystem.
+func readRecords(r io.Reader) ([]keva.Command, error) {
 	var cmds []keva.Command
 	var hdr [recordHeaderSize]byte
 
@@ -167,6 +177,9 @@ func ReadAll(path string) ([]keva.Command, error) {
 
 		length := binary.BigEndian.Uint32(hdr[0:4])
 		crc := binary.BigEndian.Uint32(hdr[4:8])
+		if length > maxRecordSize {
+			return cmds, errCorruptRecord
+		}
 
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {

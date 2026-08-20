@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-2">
         <p class="eyebrow">CHAPTER 2</p>
-        <h2 class="chapter-title">Storage Engine <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Storage Engine <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           A durable, crash-recoverable key-value engine — built correct in memory first,
           behind an interface, then made persistent with a write-ahead log.
@@ -329,10 +329,44 @@ applyCommand(d.mem, cmd)</code></pre>
             <tr><td>writes after compaction durable</td><td>appends to the new log are recovered</td></tr>
           </tbody>
         </table>
+        <h3 id="c2-fuzz">Property &amp; Fuzz Testing</h3>
+        <p>
+          Hand-written tests cover the cases we thought of. Two randomized techniques cover
+          the ones we did not.
+        </p>
+
+        <h4>Model-based property testing</h4>
+        <p>
+          Thousands of random Put / Delete / Compact / Restart operations run against both
+          the store and a plain-map reference model; after every step the two must agree. A
+          small key space forces frequent overwrites and deletes, and randomly interleaving
+          compaction and reopen checks that durability and compaction hold under arbitrary
+          sequences — not just tidy ones. Fixed seeds make any failure perfectly
+          reproducible.
+        </p>
+
+        <h4>Fuzzing the decoder</h4>
+        <p>
+          Go's coverage-guided fuzzer feeds hundreds of thousands of arbitrary byte sequences
+          to the replay decoder, asserting the one property a parser must guarantee: it never
+          panics or hangs, always returning commands or an error. The decode loop is factored
+          to read from an <code>io.Reader</code> so it can be fuzzed in memory, without
+          touching disk.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Property-based and fuzz testing — randomized operation
-          sequences and malformed record bytes to surface edge cases beyond the hand-written
-          tests.
+          <span class="k">A bug caught before it bit.</span> The decoder read a 4-byte length
+          prefix and then allocated a buffer of that size. A corrupt length — say
+          <code>0xFFFFFFFF</code> — would attempt a ~4&nbsp;GiB allocation and crash the
+          process: one bad byte in the log takes down the server on startup. The fix is a
+          <code>maxRecordSize</code> cap checked before allocating. The rule is general:
+          never trust a size field from untrusted bytes without bounding it.
+        </div>
+
+        <div class="callout">
+          <span class="k">Chapter complete.</span> The storage engine is durable,
+          crash-recoverable, self-compacting, and fuzz-hardened. Next comes the network layer,
+          so the client can talk to the daemon over the wire.
         </div>
 
         <div class="page-nav">
