@@ -20,6 +20,8 @@ const CHAPTERS = [
       { id: "c2-memory", label: "In-Memory Store" },
       { id: "c2-wal", label: "Write-Ahead Log" },
       { id: "c2-format", label: "Record Format" },
+      { id: "c2-failures", label: "Failure Modes" },
+      { id: "c2-realworld", label: "In the Wild & Growth" },
       { id: "c2-testing", label: "Testing" },
     ],
   },

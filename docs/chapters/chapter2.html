@@ -67,22 +67,95 @@ var _ Store = (*Memory)(nil)</code></pre>
 
         <h3 id="c2-wal">Write-Ahead Log</h3>
         <p>
-          Durability comes from a <b>write-ahead log</b>: before a mutation touches memory,
-          a record of it is appended to a file and flushed to stable storage. After a crash,
-          replaying the log rebuilds exact state.
+          The write-ahead log is what makes the store durable, and it is worth
+          understanding in depth — the same idea returns one level up as the Raft log.
+        </p>
+
+        <h4>The problem: crashes happen mid-write</h4>
+        <p>
+          A store that lived only in memory and periodically dumped itself to a data file
+          has two failure modes on a crash. First, every write since the last dump is lost.
+          Second, and worse: if the crash lands <em>during</em> a dump, the data file is now
+          half-old and half-new, possibly unreadable — not just recent data lost, but all of
+          it. The root cause is that updating data in place is not atomic: a single write may
+          touch several bytes or pages, and a crash can leave it half applied.
+        </p>
+
+        <h4>The idea: log the intent before doing the deed</h4>
+        <p>
+          The write-ahead principle inverts the problem: <b>before modifying state, first
+          append a durable record of what is about to happen; only then apply it to
+          memory.</b> Every mutation follows the same four steps.
+        </p>
+        <pre><code>1. encode the command       (Put k=v)
+2. append it to the WAL
+3. fsync                    ← now on disk, survives a crash
+4. apply to the in-memory map</code></pre>
+
+        <h4>Why append-only changes everything</h4>
+        <p>
+          The log is <b>append-only</b>: existing bytes are never modified, only added to the
+          end. Appending is the one file operation that is easy to make crash-safe, because a
+          crash can damage only the <em>tail</em> — the record being written — never the
+          records already durable before it.
+        </p>
+        <table>
+          <thead><tr><th></th><th>In-place update</th><th>Append-only log</th></tr></thead>
+          <tbody>
+            <tr><td>A crash can corrupt…</td><td>anywhere in the file</td><td>only the last record</td></tr>
+            <tr><td>Old data at risk?</td><td>yes</td><td>no — untouched</td></tr>
+            <tr><td>Recovery</td><td>ambiguous, often impossible</td><td>replay from the start</td></tr>
+          </tbody>
+        </table>
+
+        <h4>The recovery contract</h4>
+        <div class="callout">
+          <span class="k">Invariant.</span> State at any moment equals the result of applying,
+          in order, every command in the log. The in-memory map is only a fast cache; the log
+          is the source of truth.
+        </div>
+        <p>Recovery is therefore a single loop, run on startup:</p>
+        <pre><code>memory := empty
+for cmd in ReadAll(wal):
+    apply(cmd)   // Put → set, Delete → remove</code></pre>
+        <p>Two properties make this safe:</p>
+        <ul>
+          <li><b>Ordering</b> — append order is apply order, so <code>Put k=1</code> then
+            <code>Put k=2</code> always replays to <code>2</code>.</li>
+          <li><b>Idempotency</b> — replaying the same log twice yields the same state, so a
+            crash <em>during</em> recovery is harmless: just replay again.</li>
+        </ul>
+
+        <h4>Durability layers: flush vs fsync</h4>
+        <p>
+          Written bytes do not reach the disk platter directly. They pass through layers,
+          each of which can lose data on a crash.
+        </p>
+        <pre class="diagram"><code>your []byte
+   │  bufio.Writer.Flush()    hands bytes to the OS
+   ▼
+OS page cache                 in RAM — lost on power failure
+   │  File.Sync()  ==  fsync   forces persistence to the device
+   ▼
+physical disk                 survives power loss ✓</code></pre>
+        <p>
+          <code>Flush()</code> only moves data from the process into the OS — enough if the
+          process dies but the machine lives. <code>fsync</code> is the only call that
+          guarantees bytes are on the physical device. <code>Append</code> does both, so a
+          returned <code>Append</code> means truly durable, even across a power cut.
         </p>
         <div class="callout">
-          <span class="k">fsync vs flush.</span> <code>bufio.Flush()</code> pushes bytes from
-          the process into the OS; <code>File.Sync()</code> (fsync) forces the OS to persist
-          to the physical disk. Only after fsync does a write survive power loss — so
-          <code>Append</code> does both. The cost of that safety (a slow fsync per append) is
-          a throughput trade-off revisited in the performance phase.
+          <span class="k">Durability vs throughput.</span> An fsync is a real device
+          round-trip (often 1–10&nbsp;ms), so one fsync per append caps throughput. The
+          standard remedy — revisited in the performance phase — is <b>group commit</b>:
+          batch many appends behind a single fsync, amortizing the cost.
         </div>
 
         <h3 id="c2-format">Record Format</h3>
         <p>
-          Each record is framed with a length and a CRC32 checksum, so partial or corrupted
-          records are detectable on replay.
+          An append-only file is just a byte stream. On replay we must know where each
+          record starts and ends, and whether it is intact. The header answers both: each
+          record is framed with a length and a CRC32 checksum.
         </p>
         <pre class="diagram"><code>┌──────────┬──────────┬───────────────────────────────────────────┐
 │ uint32   │ uint32   │ payload                                     │
@@ -97,13 +170,51 @@ var _ Store = (*Memory)(nil)</code></pre>
           <span class="field"><b>valLen · val</b></span>
         </div>
         <ul>
+          <li><b>Length prefix</b> makes records self-delimiting — no separators, so a value
+            may contain any byte, including binary data.</li>
           <li><b>Big-endian</b> field encoding — stable across machines, ready for Raft to
             ship records between nodes.</li>
           <li><b>CRC on replay</b> catches silent bit-rot: a single flipped byte fails the
             checksum.</li>
-          <li><b>Torn-tail tolerance</b>: a crash mid-append leaves a short record at the
-            end; replay reads every complete record and stops cleanly rather than erroring.</li>
         </ul>
+
+        <h3 id="c2-failures">Failure Modes &amp; Recovery</h3>
+        <p>Replay distinguishes three situations, each mapping to a real event:</p>
+        <table>
+          <thead><tr><th>Situation</th><th>Meaning</th><th>Response</th></tr></thead>
+          <tbody>
+            <tr><td>Clean <code>io.EOF</code> at a boundary</td><td>normal end of log</td><td>stop, return all records</td></tr>
+            <tr><td><code>io.ErrUnexpectedEOF</code> (short read)</td><td>crashed mid-append — torn tail</td><td>stop cleanly, keep prior records</td></tr>
+            <tr><td>CRC mismatch</td><td>corruption in a complete record</td><td>return an error</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The distinction between the last two is deliberate. A torn <em>tail</em> is
+          expected — a crash during a write must not lose the writes before it — so it is
+          tolerated. Corruption inside a <em>complete</em> record is not expected and signals
+          real damage, so it is surfaced rather than silently skipped.
+        </p>
+
+        <h3 id="c2-realworld">In the Wild &amp; Growth</h3>
+        <p>The write-ahead log is the backbone of durable systems:</p>
+        <ul>
+          <li><b>PostgreSQL</b> — the WAL is the crash-recovery and replication mechanism;
+            data files are updated lazily from it.</li>
+          <li><b>LevelDB / RocksDB</b> — every write hits the WAL before the in-memory
+            memtable — exactly this log-plus-memory architecture.</li>
+          <li><b>Kafka</b> — an append-only log of framed, checksummed records, exposed as a
+            product.</li>
+          <li><b>etcd / Raft</b> — the Raft log is a WAL: each entry is appended and fsync'd
+            before it is acted on. Keva's <code>Entry{Term, Index, Command}</code> already has
+            that shape.</li>
+        </ul>
+        <div class="callout">
+          <span class="k">The one weakness.</span> An append-only log grows forever — a
+          million <code>Put</code>s to one key leaves a million records. <b>Compaction</b>
+          fixes this: periodically snapshot current state, then discard log records before the
+          snapshot. Recovery loads the snapshot and replays only the tail. The same mechanism
+          returns in Raft as log compaction / snapshotting.
+        </div>
 
         <h3 id="c2-testing">Testing</h3>
         <p>
