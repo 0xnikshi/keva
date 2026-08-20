@@ -15,4 +15,5 @@ type Store interface {
 	Get(key keva.Key) (keva.Value, error)
 	Put(key keva.Key, value keva.Value) error
 	Delete(key keva.Key) error
+	Close() error
 }

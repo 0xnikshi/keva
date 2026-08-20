@@ -51,6 +51,10 @@ func (m *Memory) Delete(key keva.Key) error {
 	return nil
 }
 
+// Close releases resources held by the store. The in-memory store holds
+// none, so this is a no-op.
+func (m *Memory) Close() error { return nil }
+
 // cloneValue returns an independent copy of v so that data held in the
 // store cannot be mutated through a slice the caller still references.
 func cloneValue(v keva.Value) keva.Value {

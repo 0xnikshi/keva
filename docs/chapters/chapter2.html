@@ -216,6 +216,51 @@ physical disk                 survives power loss ✓</code></pre>
           returns in Raft as log compaction / snapshotting.
         </div>
 
+        <h3 id="c2-recovery">Crash Recovery</h3>
+        <p>
+          The durable store composes the two proven pieces — the in-memory map and the
+          write-ahead log — into one <code>Store</code>. It writes to the log before memory,
+          and on open it rebuilds memory by replaying the log.
+        </p>
+        <pre><code>type Durable struct {
+    mem *Memory   // fast, queryable state
+    wal *WAL      // durable, ordered history
+}</code></pre>
+
+        <h4>Write path: log before memory</h4>
+        <p>
+          Every mutation is appended (and fsync'd) to the log first, and only then applied to
+          memory. The ordering <em>is</em> the guarantee: a crash between the two is safe,
+          because replay re-applies the committed command. The reverse order could leave
+          memory ahead of the log and silently lose the write.
+        </p>
+        <pre><code>func (d *Durable) Put(key, value) error {
+    cmd := Command{Op: OpPut, Key: key, Value: value}
+    if err := d.wal.Append(cmd); err != nil {   // 1. durable first
+        return err
+    }
+    applyCommand(d.mem, cmd)                      // 2. then visible
+    return nil
+}</code></pre>
+
+        <h4>One apply path for writes and replay</h4>
+        <p>
+          A single function maps a <code>Command</code> onto state, used by both live writes
+          and replay on open. Because recovery runs the exact same code as the original write,
+          replayed state is identical to the state that was lost — not merely similar.
+        </p>
+        <pre><code>// on open
+for cmd := range ReadAll(path) { applyCommand(mem, cmd) }
+// on write
+applyCommand(d.mem, cmd)</code></pre>
+
+        <div class="callout">
+          <span class="k">The headline guarantee.</span> Write with one instance, close, then
+          open a fresh instance on the same file — the data is recovered. And because every
+          append fsyncs, writes survive even a crash with no clean close: the log on disk is
+          enough to rebuild state.
+        </div>
+
         <h3 id="c2-testing">Testing</h3>
         <p>
           Tests target the interesting failure modes, not just the happy path — each using
@@ -229,12 +274,15 @@ physical disk                 survives power loss ✓</code></pre>
             <tr><td>append &amp; replay</td><td>records round-trip through the file</td></tr>
             <tr><td>tolerates torn tail</td><td>crash mid-write loses only the partial record</td></tr>
             <tr><td>detects corruption</td><td>CRC catches a flipped byte</td></tr>
+            <tr><td>persists across reopen</td><td>a fresh instance recovers state from the log</td></tr>
+            <tr><td>recovers without close</td><td>fsync'd writes survive a crash with no clean shutdown</td></tr>
+            <tr><td>replay reflects last write</td><td>ordering holds — the newest value wins</td></tr>
           </tbody>
         </table>
         <div class="callout">
-          <span class="k">Next.</span> Crash recovery — a <code>Durable</code> store wrapping
-          <code>Memory</code> + <code>WAL</code> that replays the log on open, proven by a
-          write → "restart" → read-back test.
+          <span class="k">Next.</span> On-disk structure and compaction — the append-only log
+          grows without bound, so periodic snapshots will let recovery load a checkpoint and
+          replay only the tail.
         </div>
 
         <div class="page-nav">

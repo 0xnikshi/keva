@@ -22,6 +22,7 @@ const CHAPTERS = [
       { id: "c2-format", label: "Record Format" },
       { id: "c2-failures", label: "Failure Modes" },
       { id: "c2-realworld", label: "In the Wild & Growth" },
+      { id: "c2-recovery", label: "Crash Recovery" },
       { id: "c2-testing", label: "Testing" },
     ],
   },
