@@ -28,6 +28,18 @@ const CHAPTERS = [
       { id: "c2-fuzz", label: "Property & Fuzz Testing" },
     ],
   },
+  {
+    label: "Ch. 3 — Network Layer",
+    page: "chapters/chapter3.html",
+    sections: [
+      { id: "c3-approach", label: "Approach & Transport" },
+      { id: "c3-contract", label: "API Contract" },
+      { id: "c3-routing", label: "Routing" },
+      { id: "c3-handlers", label: "Handlers & the Store" },
+      { id: "c3-errors", label: "Error Mapping" },
+      { id: "c3-testing", label: "Testing" },
+    ],
+  },
 ];
 
 const CHEVRON =

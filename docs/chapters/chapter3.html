@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 3 · Network Layer — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 3</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-3">
+        <p class="eyebrow">CHAPTER 3</p>
+        <h2 class="chapter-title">Network Layer <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          Turn Keva from a library into a running client–server system: a daemon that serves
+          the storage engine over the network, and a CLI that talks to it.
+        </p>
+
+        <h3 id="c3-approach">Approach &amp; Transport</h3>
+        <p>
+          The transport is HTTP with JSON bodies, built entirely on the standard library. It
+          is the simplest path to a running system, needs no code generation or extra tooling,
+          and is trivially debuggable — any request can be reproduced with <code>curl</code>.
+          The service is defined once as a shared contract, implemented by the server, and
+          consumed by the client.
+        </p>
+
+        <h3 id="c3-contract">API Contract</h3>
+        <p>One key per URL path; the value travels in a small JSON envelope.</p>
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Body</th><th>Success</th><th>Missing</th></tr></thead>
+          <tbody>
+            <tr><td>PUT</td><td><code>/v1/kv/{key}</code></td><td><code>{"value": "…"}</code></td><td>204</td><td>—</td></tr>
+            <tr><td>GET</td><td><code>/v1/kv/{key}</code></td><td>—</td><td>200 <code>{"value": "…"}</code></td><td>404</td></tr>
+            <tr><td>DELETE</td><td><code>/v1/kv/{key}</code></td><td>—</td><td>204</td><td>—</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <span class="k">Binary-safe values, for free.</span> Values are <code>[]byte</code>,
+          and <code>encoding/json</code> represents a byte slice as a base64 string. So
+          <code>value = "hello"</code> travels as <code>{"value":"aGVsbG8="}</code>, and any
+          binary payload is safe inside JSON with no extra work.
+        </div>
+
+        <h3 id="c3-routing">Routing</h3>
+        <p>
+          Go 1.22's <code>ServeMux</code> supports method-aware patterns and path wildcards,
+          so no third-party router is needed. A pattern binds a method and a path template,
+          and the wildcard segment is read back by name.
+        </p>
+        <pre><code>mux.HandleFunc("GET /v1/kv/{key}", s.handleGet)
+mux.HandleFunc("PUT /v1/kv/{key}", s.handlePut)
+mux.HandleFunc("DELETE /v1/kv/{key}", s.handleDelete)
+
+key := keva.Key(r.PathValue("key"))</code></pre>
+        <p>
+          The mux also returns <code>405 Method Not Allowed</code> automatically for a method
+          with no matching pattern on an existing path.
+        </p>
+
+        <h3 id="c3-handlers">Handlers &amp; the Store</h3>
+        <p>
+          The server holds a <code>store.Store</code> — the interface, not a concrete type.
+          Tests inject the in-memory store; the daemon will inject the durable one. The server
+          never knows which, so the network layer is decoupled from persistence.
+        </p>
+        <pre><code>type Server struct { store store.Store }
+
+func New(s store.Store) *Server { return &amp;Server{store: s} }</code></pre>
+
+        <h3 id="c3-errors">Error Mapping</h3>
+        <p>Mapping domain outcomes onto HTTP status codes is the server's responsibility.</p>
+        <table>
+          <thead><tr><th>Outcome</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>successful write</td><td>204 No Content</td></tr>
+            <tr><td>successful read</td><td>200 + JSON value</td></tr>
+            <tr><td><code>store.ErrNotFound</code></td><td>404 Not Found</td></tr>
+            <tr><td>malformed JSON body</td><td>400 Bad Request</td></tr>
+            <tr><td>unexpected store error</td><td>500 — generic message, no internals leaked</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="c3-testing">Testing</h3>
+        <p>
+          Handlers are tested with <code>net/http/httptest</code>: a recorder captures the
+          response to a synthetic request, so routing and logic are verified without opening a
+          socket — fast and deterministic.
+        </p>
+        <table>
+          <thead><tr><th>Test</th><th>Proves</th></tr></thead>
+          <tbody>
+            <tr><td>put then get</td><td>a written value round-trips through JSON</td></tr>
+            <tr><td>get missing → 404</td><td>ErrNotFound maps to Not Found with an error body</td></tr>
+            <tr><td>delete then get</td><td>a deleted key is gone</td></tr>
+            <tr><td>invalid JSON → 400</td><td>a malformed body is rejected</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <span class="k">Next.</span> Run the service in the <code>kevad</code> daemon — a real
+          listener, an address flag, and graceful shutdown — then a <code>keva</code> CLI that
+          dials it.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter2.html"><span class="nav-dir">← Previous</span>Ch. 2 — Storage Engine</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>
