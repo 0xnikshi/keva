@@ -39,6 +39,8 @@ const CHAPTERS = [
       { id: "c3-errors", label: "Error Mapping" },
       { id: "c3-testing", label: "Testing" },
       { id: "c3-daemon", label: "Daemon & Lifecycle" },
+      { id: "c3-client", label: "Client CLI" },
+      { id: "c3-robustness", label: "Robustness" },
     ],
   },
 ];

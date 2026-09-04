@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +12,11 @@ import (
 	"github.com/0xnikshi/keva/internal/api"
 	"github.com/0xnikshi/keva/internal/store"
 )
+
+func init() {
+	// Silence the request-logging middleware during tests.
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
 
 func newTestServer() http.Handler {
 	return New(store.NewMemory()).Handler()
@@ -85,5 +92,15 @@ func TestPutInvalidJSONReturns400(t *testing.T) {
 	w := do(t, h, http.MethodPut, "/v1/kv/k", []byte("{not valid json"))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestPutBodyTooLargeReturns413(t *testing.T) {
+	h := newTestServer()
+
+	body, _ := json.Marshal(api.PutRequest{Value: make([]byte, 2<<20)}) // ~2 MiB
+	w := do(t, h, http.MethodPut, "/v1/kv/big", body)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", w.Code)
 	}
 }

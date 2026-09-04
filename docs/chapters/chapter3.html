@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-3">
         <p class="eyebrow">CHAPTER 3</p>
-        <h2 class="chapter-title">Network Layer <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Network Layer <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           Turn Keva from a library into a running client–server system: a daemon that serves
           the storage engine over the network, and a CLI that talks to it.
@@ -160,9 +160,73 @@ srv.Shutdown(shutdownCtx)   // drain in-flight, then stop</code></pre>
           recovered from the log. The full path holds: HTTP → store → WAL → replay → response.
         </div>
 
+        <h3 id="c3-client">Client CLI</h3>
+        <p>
+          The <code>keva</code> command dials the daemon over HTTP, wrapping the wire details
+          behind three subcommands. Flags come before the command; <code>--addr</code> selects
+          the daemon.
+        </p>
+        <pre><code>keva put greeting "hello world"
+keva get greeting            # → hello world
+keva delete greeting
+keva get greeting            # → error, exit code 1</code></pre>
+        <p>
+          The client mirrors the server's contract in reverse: <code>200</code> decodes a
+          value, <code>404</code> becomes a not-found error, <code>204</code> is success, and
+          anything else carries the server's JSON error message. A missing key exits non-zero,
+          so the CLI composes cleanly in shell scripts.
+        </p>
         <div class="callout">
-          <span class="k">Next.</span> The <code>keva</code> client — CLI subcommands that dial
-          the daemon over HTTP, so the store is usable without raw <code>curl</code>.
+          <span class="k">Built for testing.</span> The client holds an injectable
+          <code>*http.Client</code> and address, so tests drive the real client against a real
+          server over loopback (<code>httptest.NewServer</code>) — a genuine integration test
+          with no mocks.
+        </div>
+
+        <h3 id="c3-robustness">Robustness</h3>
+        <p>Three production concerns round out the network layer.</p>
+
+        <h4>Request logging as middleware</h4>
+        <p>
+          Cross-cutting concerns use the Go middleware pattern: a function that takes a handler
+          and returns a handler, wrapping it to do work before and after. Here it logs the
+          method, path, status, and duration of every request. Because each layer has the same
+          <code>http.Handler</code> shape, middleware composes freely.
+        </p>
+        <pre><code>func logging(h http.Handler) http.Handler {
+    return http.HandlerFunc(func(w, r) {
+        start := time.Now()
+        rec := &amp;statusRecorder{ResponseWriter: w, status: 200}
+        h.ServeHTTP(rec, r)
+        slog.Info("request", "method", r.Method, "status", rec.status, ...)
+    })
+}</code></pre>
+        <p>
+          The status code is not readable after the fact, so a small wrapper embeds the
+          <code>ResponseWriter</code> and overrides <code>WriteHeader</code> to record it while
+          delegating everything else.
+        </p>
+
+        <h4>Bounding untrusted input</h4>
+        <p>
+          Request bodies are capped with <code>http.MaxBytesReader</code>; a payload over the
+          limit is rejected with <code>413 Request Entity Too Large</code> rather than read
+          into memory — the same rule as the log decoder's size cap: never trust a size from
+          the network without bounding it.
+        </p>
+
+        <h4>Client timeout</h4>
+        <p>
+          The default HTTP client has no timeout, so a hung daemon would hang the CLI
+          indefinitely. The client sets an explicit timeout; combined with the daemon's read,
+          write, and idle timeouts, neither side can be held open forever.
+        </p>
+
+        <div class="callout">
+          <span class="k">Chapter complete.</span> Keva is now a running, persistent,
+          network-accessible key-value store with a daemon and a client. Next comes the
+          flagship: Raft consensus, replicating the log across a cluster so the store survives
+          node failures.
         </div>
 
         <div class="page-nav">

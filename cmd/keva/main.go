@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/0xnikshi/keva/internal/api"
 )
@@ -46,7 +47,7 @@ func run(args []string) error {
 		return errors.New("no command given")
 	}
 
-	c := &client{addr: normalizeAddr(*addr), http: http.DefaultClient}
+	c := &client{addr: normalizeAddr(*addr), http: &http.Client{Timeout: 10 * time.Second}}
 	cmd, cmdArgs := rest[0], rest[1:]
 
 	switch cmd {

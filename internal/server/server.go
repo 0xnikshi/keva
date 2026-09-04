@@ -20,13 +20,18 @@ func New(s store.Store) *Server {
 	return &Server{store: s}
 }
 
-// Handler builds the HTTP routes and returns the root handler.
+// maxBodySize caps a request body so a client cannot exhaust memory with
+// an oversized payload.
+const maxBodySize = 1 << 20 // 1 MiB
+
+// Handler builds the HTTP routes and returns the root handler, wrapped in
+// the request-logging middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/kv/{key}", s.handleGet)
 	mux.HandleFunc("PUT /v1/kv/{key}", s.handlePut)
 	mux.HandleFunc("DELETE /v1/kv/{key}", s.handleDelete)
-	return mux
+	return logging(mux)
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +52,15 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	key := keva.Key(r.PathValue("key"))
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	var req api.PutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
