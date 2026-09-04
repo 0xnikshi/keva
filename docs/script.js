@@ -43,6 +43,19 @@ const CHAPTERS = [
       { id: "c3-robustness", label: "Robustness" },
     ],
   },
+  {
+    label: "Ch. 4 — Raft Consensus",
+    page: "chapters/chapter4.html",
+    sections: [
+      { id: "c4-problem", label: "The Problem" },
+      { id: "c4-idea", label: "One Leader Owns the Log" },
+      { id: "c4-roles", label: "The Three Roles" },
+      { id: "c4-terms", label: "Terms" },
+      { id: "c4-rpcs", label: "The Two RPCs" },
+      { id: "c4-quorum", label: "Why Majority Works" },
+      { id: "c4-skeleton", label: "Node Skeleton & State" },
+    ],
+  },
 ];
 
 const CHEVRON =

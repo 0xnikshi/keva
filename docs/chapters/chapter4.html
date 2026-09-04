@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 4 · Raft Consensus — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 4</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-4">
+        <p class="eyebrow">CHAPTER 4</p>
+        <h2 class="chapter-title">Raft Consensus <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          Turn single-node Keva into a fault-tolerant cluster that agrees on one ordered log,
+          using the Raft consensus algorithm.
+        </p>
+
+        <h3 id="c4-problem">The Problem</h3>
+        <p>
+          Raft keeps a cluster of servers in sync despite crashes and network splits, using a
+          <b>replicated state machine</b>: if every server applies the same commands in the
+          same order, they all reach the same state. The problem therefore reduces to agreeing
+          on <em>one ordered log of commands</em> — which is consensus.
+        </p>
+        <p>
+          Keva already applies an ordered log to reach state — the storage engine replaying its
+          write-ahead log. Raft is the part that decides <em>what that log contains</em> across
+          the whole cluster.
+        </p>
+
+        <h3 id="c4-idea">One Leader Owns the Log</h3>
+        <p>
+          Rather than have all servers negotiate as equals, Raft elects a single <b>leader</b>
+          as the source of truth. Clients send commands to the leader; it appends to its log
+          and replicates to followers; once a <b>majority</b> store an entry it is
+          <em>committed</em> and applied on every node. Everything in the algorithm is either
+          electing a leader or replicating the log.
+        </p>
+
+        <h3 id="c4-roles">The Three Roles</h3>
+        <p>Every node is always in exactly one of three states.</p>
+        <table>
+          <thead><tr><th>Role</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr><td>Follower</td><td>Passive; responds to the leader and to candidates. The default.</td></tr>
+            <tr><td>Candidate</td><td>A follower that timed out waiting for a leader and is campaigning for votes.</td></tr>
+            <tr><td>Leader</td><td>Won an election; handles clients, sends heartbeats, replicates the log.</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The flow is <code>Follower → (timeout) → Candidate → (wins majority) → Leader</code>.
+          A leader that sees a newer term steps back down to follower.
+        </p>
+
+        <h3 id="c4-terms">Terms</h3>
+        <p>
+          Time is divided into numbered <b>terms</b>, each beginning with an election, with at
+          most one leader per term. Any node that sees a term higher than its own adopts it and
+          becomes a follower; a message from an older term is rejected as stale. Terms are a
+          logical clock that replaces wall-clock time, which cannot be trusted across machines.
+        </p>
+
+        <h3 id="c4-rpcs">The Two RPCs</h3>
+        <p>The entire protocol is two remote calls.</p>
+        <div class="fields">
+          <span class="field"><b>RequestVote</b> candidates gather votes</span>
+          <span class="field"><b>AppendEntries</b> leader replicates entries; empty = heartbeat</span>
+        </div>
+        <p>Elections use the first; log replication uses the second.</p>
+
+        <h3 id="c4-quorum">Why Majority Works</h3>
+        <p>
+          Commit requires a <b>majority</b>, and the reason is elegant: any two majorities
+          overlap in at least one node. A committed entry lives on a majority; any future
+          election winner also needs a majority; so the winner is guaranteed to have seen the
+          committed entry. <b>Committed data can never be lost across a leader change.</b> A
+          cluster of <code>N</code> nodes tolerates <code>⌊(N−1)/2⌋</code> failures — 1 of 3,
+          2 of 5.
+        </p>
+
+        <h3 id="c4-skeleton">Node Skeleton &amp; State</h3>
+        <p>
+          The node data model follows the Raft paper's state layout, split into two categories.
+          The split is safety-critical.
+        </p>
+        <table>
+          <thead><tr><th>Field</th><th>Category</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><code>currentTerm</code></td><td>persistent</td><td>the latest term seen</td></tr>
+            <tr><td><code>votedFor</code></td><td>persistent</td><td>who this node voted for this term</td></tr>
+            <tr><td><code>log</code></td><td>persistent</td><td>the replicated command entries</td></tr>
+            <tr><td><code>state</code></td><td>volatile</td><td>the current role, safe to rebuild on restart</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <span class="k">Why persistence is safety-critical.</span> Suppose a node votes for
+          candidate A in term 5, then crashes. If it forgot the vote on restart, it could vote
+          for candidate B in the same term 5 — two leaders in one term, which breaks
+          everything. So <code>currentTerm</code> and <code>votedFor</code> must reach stable
+          storage before the node acts on an RPC.
+        </div>
+
+        <h4>1-based log indices</h4>
+        <p>
+          Raft numbers entries from 1; index 0 means "empty, before the log". The slice holds
+          entries 1..N, so the last index is simply the length, and an empty log reports index
+          0 / term 0. These two values drive the election safety check in the next step.
+        </p>
+        <pre><code>func (r *Raft) lastLogIndex() uint64 { return uint64(len(r.log)) }</code></pre>
+
+        <h4>becomeFollower — the universal step-down</h4>
+        <p>
+          The most-called transition in Raft. Any time a node sees a higher term it adopts the
+          term, drops to follower, and clears its vote — a new term means a fresh vote to give.
+          Centralizing it means every RPC handler just calls it.
+        </p>
+        <pre><code>func (r *Raft) becomeFollower(term uint64) {
+    r.state = Follower
+    r.currentTerm = term
+    r.votedFor = ""   // fresh term → vote available again
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Locking convention.</span> Exported methods take the mutex; internal
+          helpers assume the caller already holds it. RPC handlers lock once at the top and call
+          helpers freely — never double-locking a non-reentrant mutex.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Leader election — the <code>RequestVote</code> RPC and the
+          randomized election timeout that turns a follower into a candidate and, with a
+          majority, into a leader.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter3.html"><span class="nav-dir">← Previous</span>Ch. 3 — Network Layer</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>
