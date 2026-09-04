@@ -104,10 +104,65 @@ func New(s store.Store) *Server { return &amp;Server{store: s} }</code></pre>
           </tbody>
         </table>
 
+        <h3 id="c3-daemon">Daemon &amp; Lifecycle</h3>
+        <p>
+          The <code>kevad</code> daemon opens a durable store and serves the API until it
+          receives a shutdown signal. Two flags configure it: <code>--addr</code> (listen
+          address) and <code>--data</code> (the write-ahead log path).
+        </p>
+
+        <h4>Signals as context cancellation</h4>
+        <p>
+          A shutdown request — Ctrl+C (<code>SIGINT</code>) or <code>SIGTERM</code> from an
+          orchestrator — is surfaced as a cancelled context, so "stop now" becomes the same
+          <code>&lt;-ctx.Done()</code> primitive used everywhere else.
+        </p>
+        <pre><code>ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()</code></pre>
+
+        <h4>Serve, then wait for a signal or a failure</h4>
+        <p>
+          <code>ListenAndServe</code> blocks, so it runs in a goroutine and reports errors on
+          a channel. A <code>select</code> waits for whichever comes first: a serving error or
+          the shutdown signal.
+        </p>
+        <pre><code>go func() {
+    if err := srv.ListenAndServe(); err != nil &amp;&amp; !errors.Is(err, http.ErrServerClosed) {
+        errCh &lt;- err
+    }
+}()
+
+select {
+case err := &lt;-errCh:   // failed to start or serve
+case &lt;-ctx.Done():     // shutdown requested
+}</code></pre>
+
+        <h4>Graceful shutdown</h4>
+        <p>
+          On a signal the server stops accepting new connections but lets in-flight requests
+          finish within a bounded window, then the store is closed. Deferred cleanup runs last,
+          so the store closes only after the server has fully drained — a request can never
+          touch a closed store.
+        </p>
+        <pre><code>shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+srv.Shutdown(shutdownCtx)   // drain in-flight, then stop</code></pre>
+
         <div class="callout">
-          <span class="k">Next.</span> Run the service in the <code>kevad</code> daemon — a real
-          listener, an address flag, and graceful shutdown — then a <code>keva</code> CLI that
-          dials it.
+          <span class="k">Hardening.</span> The server sets explicit read, write, and idle
+          timeouts. Without them a slow or malicious client can hold a connection open
+          indefinitely and exhaust the server — the classic Slowloris failure.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven end to end.</span> Writing a value over HTTP, stopping the
+          daemon, restarting it on the same data file, and reading the value back returns it —
+          recovered from the log. The full path holds: HTTP → store → WAL → replay → response.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> The <code>keva</code> client — CLI subcommands that dial
+          the daemon over HTTP, so the store is usable without raw <code>curl</code>.
         </div>
 
         <div class="page-nav">
