@@ -2,14 +2,17 @@ package raft
 
 import (
 	"sync"
+	"time"
 
 	"github.com/0xnikshi/keva/internal/keva"
 )
 
 // Config holds the static configuration of a Raft node.
 type Config struct {
-	ID    string   // this node's identifier
-	Peers []string // identifiers of the other nodes in the cluster
+	ID                string        // this node's identifier
+	Peers             []string      // identifiers of the other nodes in the cluster
+	ElectionTimeout   time.Duration // base election timeout; randomized in [T, 2T)
+	HeartbeatInterval time.Duration // leader heartbeat / replication period
 }
 
 // Raft is a single node participating in the consensus protocol.
@@ -38,16 +41,34 @@ type Raft struct {
 	// Leader-only volatile state, reset on each election.
 	nextIndex  map[string]uint64 // next log index to send to each peer
 	matchIndex map[string]uint64 // highest index known replicated on each peer
+
+	// Run-loop timing and lifecycle.
+	baseTimeout       time.Duration
+	heartbeatInterval time.Duration
+	electionTimeout   time.Duration
+	lastContact       time.Time
+	running           bool
+	stopCh            chan struct{}
 }
 
 // New creates a node in the follower state at term 0 with an empty log,
 // using tr to reach its peers.
 func New(cfg Config, tr Transport) *Raft {
+	base := cfg.ElectionTimeout
+	if base <= 0 {
+		base = 150 * time.Millisecond
+	}
+	hb := cfg.HeartbeatInterval
+	if hb <= 0 {
+		hb = 50 * time.Millisecond
+	}
 	return &Raft{
-		id:        cfg.ID,
-		peers:     cfg.Peers,
-		transport: tr,
-		state:     Follower,
+		id:                cfg.ID,
+		peers:             cfg.Peers,
+		transport:         tr,
+		state:             Follower,
+		baseTimeout:       base,
+		heartbeatInterval: hb,
 	}
 }
 

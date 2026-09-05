@@ -26,6 +26,7 @@ func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	} else {
 		r.state = Follower
 	}
+	r.resetElectionDeadline() // heard from a live leader
 
 	// Log matching: we must already hold the entry preceding the new ones,
 	// with the same term. Otherwise reject so the leader backs up and retries.

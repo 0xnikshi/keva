@@ -22,6 +22,7 @@ func (r *Raft) RequestVote(args RequestVoteArgs) RequestVoteReply {
 	if canVote && r.candidateLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		r.votedFor = args.CandidateID
 		r.persist()
+		r.resetElectionDeadline()
 		return RequestVoteReply{Term: r.currentTerm, VoteGranted: true}
 	}
 	return RequestVoteReply{Term: r.currentTerm, VoteGranted: false}

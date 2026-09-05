@@ -58,6 +58,7 @@ const CHAPTERS = [
       { id: "c4-replication", label: "Log Replication" },
       { id: "c4-apply", label: "Applying Entries" },
       { id: "c4-persistence", label: "Persistence" },
+      { id: "c4-runloop", label: "The Run Loop" },
     ],
   },
 ];

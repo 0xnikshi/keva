@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-4">
         <p class="eyebrow">CHAPTER 4</p>
-        <h2 class="chapter-title">Raft Consensus <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Raft Consensus <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           Turn single-node Keva into a fault-tolerant cluster that agrees on one ordered log,
           using the Raft consensus algorithm.
@@ -293,10 +293,41 @@ type Storage interface {
           loads the saved state and the node resumes exactly where it left off.
         </div>
 
+        <h3 id="c4-runloop">The Run Loop</h3>
+        <p>
+          A background loop makes the node act on its own. Every tick: a leader replicates and
+          heartbeats; a follower or candidate that has heard nothing within its randomized
+          election timeout starts an election.
+        </p>
+        <pre><code>func (r *Raft) tick() {
+    if r.state == Leader {
+        r.replicate()            // heartbeat + replicate
+        return
+    }
+    if time.Since(r.lastContact) >= r.electionTimeout {
+        r.startElection()        // no leader heard from → campaign
+        r.resetElectionDeadline()
+    }
+}</code></pre>
+        <p>
+          The election timer resets whenever the node hears from a live leader (a valid
+          <code>AppendEntries</code>) or grants a vote, so a healthy cluster never churns. Each
+          reset picks a fresh timeout in <code>[T, 2T)</code> — the randomization that stops two
+          followers from campaigning in lockstep and splitting the vote.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> A run loop with real timers — automatic election timeouts
-          and periodic heartbeats — and multi-node tests that exercise elections and
-          replication under a simulated network.
+          <span class="k">Proven under a simulated network.</span> A three-node cluster elects a
+          single leader on its own; when that leader is stopped and made unreachable, the
+          survivors detect the silence and elect a new one — automatic failover, exactly Raft's
+          promise.
+        </div>
+
+        <div class="callout">
+          <span class="k">Chapter complete.</span> Keva now has a working Raft core — elect,
+          replicate, commit, apply, persist, and recover — driven autonomously by timers. Next
+          chapter wires it to the storage engine so the cluster serves consistent reads and
+          writes.
         </div>
 
         <div class="page-nav">

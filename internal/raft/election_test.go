@@ -2,35 +2,56 @@ package raft
 
 import (
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/0xnikshi/keva/internal/keva"
 )
 
-// memTransport routes RequestVote calls to peers held in memory — no
-// network, so elections are deterministic.
+// memTransport routes RPCs to peers held in memory — no network, so
+// elections are deterministic. A downed peer returns an unreachable error,
+// modeling a crashed or partitioned node.
 type memTransport struct {
+	mu    sync.Mutex
 	nodes map[string]*Raft
+	down  map[string]bool
+}
+
+func (t *memTransport) setDown(id string, d bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.down[id] = d
+}
+
+func (t *memTransport) target(peer string) (*Raft, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.down[peer] {
+		return nil, false
+	}
+	n, ok := t.nodes[peer]
+	return n, ok
 }
 
 func (t *memTransport) RequestVote(peer string, args RequestVoteArgs) (RequestVoteReply, error) {
-	n, ok := t.nodes[peer]
+	n, ok := t.target(peer)
 	if !ok {
-		return RequestVoteReply{}, fmt.Errorf("no peer %q", peer)
+		return RequestVoteReply{}, fmt.Errorf("peer %q unreachable", peer)
 	}
 	return n.RequestVote(args), nil
 }
 
 func (t *memTransport) AppendEntries(peer string, args AppendEntriesArgs) (AppendEntriesReply, error) {
-	n, ok := t.nodes[peer]
+	n, ok := t.target(peer)
 	if !ok {
-		return AppendEntriesReply{}, fmt.Errorf("no peer %q", peer)
+		return AppendEntriesReply{}, fmt.Errorf("peer %q unreachable", peer)
 	}
 	return n.AppendEntries(args), nil
 }
 
 func newCluster(ids ...string) map[string]*Raft {
-	tr := &memTransport{nodes: map[string]*Raft{}}
+	tr := &memTransport{nodes: map[string]*Raft{}, down: map[string]bool{}}
 	for _, id := range ids {
 		var peers []string
 		for _, other := range ids {
@@ -38,7 +59,12 @@ func newCluster(ids ...string) map[string]*Raft {
 				peers = append(peers, other)
 			}
 		}
-		tr.nodes[id] = New(Config{ID: id, Peers: peers}, tr)
+		tr.nodes[id] = New(Config{
+			ID:                id,
+			Peers:             peers,
+			ElectionTimeout:   60 * time.Millisecond,
+			HeartbeatInterval: 20 * time.Millisecond,
+		}, tr)
 	}
 	return tr.nodes
 }
