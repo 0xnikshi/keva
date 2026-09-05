@@ -14,11 +14,14 @@ type Config struct {
 
 // Raft is a single node participating in the consensus protocol.
 type Raft struct {
-	mu sync.Mutex
+	mu      sync.Mutex
+	applyMu sync.Mutex // serializes state-machine application to keep it ordered
 
 	id        string
 	peers     []string
 	transport Transport
+	sm        StateMachine
+	storage   Storage
 
 	// Persistent state: must be saved to stable storage before the node
 	// responds to an RPC, so it survives a crash. (Disk persistence is
@@ -30,6 +33,7 @@ type Raft struct {
 	// Volatile state, rebuilt on restart.
 	state       State
 	commitIndex uint64 // highest log index known to be committed
+	lastApplied uint64 // highest log index applied to the state machine
 
 	// Leader-only volatile state, reset on each election.
 	nextIndex  map[string]uint64 // next log index to send to each peer
@@ -84,4 +88,5 @@ func (r *Raft) becomeFollower(term uint64) {
 	r.state = Follower
 	r.currentTerm = term
 	r.votedFor = ""
+	r.persist()
 }

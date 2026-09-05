@@ -13,11 +13,12 @@ var ErrNotLeader = errors.New("raft: not leader")
 // both to replicate log entries and, with no entries, as a heartbeat.
 func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	// Reject a leader from an older term.
 	if args.Term < r.currentTerm {
-		return AppendEntriesReply{Term: r.currentTerm, Success: false}
+		reply := AppendEntriesReply{Term: r.currentTerm, Success: false}
+		r.mu.Unlock()
+		return reply
 	}
 	// Recognize this leader for the term and (re)assert follower state.
 	if args.Term > r.currentTerm {
@@ -29,10 +30,14 @@ func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	// Log matching: we must already hold the entry preceding the new ones,
 	// with the same term. Otherwise reject so the leader backs up and retries.
 	if args.PrevLogIndex > r.lastLogIndex() {
-		return AppendEntriesReply{Term: r.currentTerm, Success: false}
+		reply := AppendEntriesReply{Term: r.currentTerm, Success: false}
+		r.mu.Unlock()
+		return reply
 	}
 	if args.PrevLogIndex > 0 && r.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
-		return AppendEntriesReply{Term: r.currentTerm, Success: false}
+		reply := AppendEntriesReply{Term: r.currentTerm, Success: false}
+		r.mu.Unlock()
+		return reply
 	}
 
 	// Append new entries, truncating the first conflicting entry and
@@ -54,7 +59,14 @@ func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 		r.commitIndex = min(args.LeaderCommit, r.lastLogIndex())
 	}
 
-	return AppendEntriesReply{Term: r.currentTerm, Success: true}
+	r.persist() // the log and/or term may have changed
+	reply := AppendEntriesReply{Term: r.currentTerm, Success: true}
+	r.mu.Unlock()
+
+	// Apply any entries the leader just told us are committed. Done after
+	// releasing the lock, since applyCommitted takes it itself.
+	r.applyCommitted()
+	return reply
 }
 
 // Submit appends a command to the leader's log and replicates it, returning
@@ -67,6 +79,7 @@ func (r *Raft) Submit(cmd keva.Command) (uint64, error) {
 	}
 	index := r.lastLogIndex() + 1
 	r.log = append(r.log, keva.Entry{Term: r.currentTerm, Index: index, Command: cmd})
+	r.persist()
 	r.mu.Unlock()
 
 	r.replicate()
@@ -92,6 +105,8 @@ func (r *Raft) replicate() {
 	r.mu.Lock()
 	r.advanceCommit()
 	r.mu.Unlock()
+
+	r.applyCommitted()
 }
 
 // replicateTo brings one peer's log up to date, backing off nextIndex on a

@@ -223,9 +223,80 @@ if args.PrevLogIndex > 0 &amp;&amp; r.log[args.PrevLogIndex-1].Term != args.Prev
           command is now durable across the cluster.
         </div>
 
+        <h3 id="c4-apply">Applying Entries</h3>
+        <p>
+          Agreeing on the log is not enough — the committed commands must be <em>run</em>. A
+          node tracks two indices: <code>commitIndex</code> (agreed by the cluster) and
+          <code>lastApplied</code> (already run). Whenever the first outruns the second, the gap
+          is applied to the <b>state machine</b> in order.
+        </p>
+        <pre><code>type StateMachine interface {
+    Apply(cmd keva.Command)
+}</code></pre>
+        <p>
+          Raft depends only on this tiny interface, not on the store directly — the same
+          decoupling used throughout Keva. Committed entries flow into whatever satisfies it;
+          wiring it to the durable store is the next chapter.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Apply committed entries to the state machine — feeding the
-          committed log into the storage engine so the replicated data becomes readable state.
+          <span class="k">Exactly once, in order.</span> A dedicated apply mutex serializes
+          application, so entries are never applied twice or out of order even when a client
+          submission and an incoming heartbeat both advance the commit index concurrently.
+          Application also happens <em>after</em> releasing the main lock, so a slow state
+          machine never blocks the consensus path.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A leader that submits two commands applies both
+          immediately; after one more replication round the followers apply them too — every
+          node's state machine converges on the same commands in the same order.
+        </div>
+
+        <h3 id="c4-persistence">Persistence</h3>
+        <p>
+          Three pieces of state must survive a crash, or the cluster's guarantees break:
+          <code>currentTerm</code>, <code>votedFor</code>, and the <code>log</code>. They are
+          written to stable storage <em>before</em> the node acts on any RPC.
+        </p>
+        <table>
+          <thead><tr><th>Lose on crash…</th><th>…and this breaks</th></tr></thead>
+          <tbody>
+            <tr><td><code>votedFor</code></td><td>the node could vote twice in one term → two leaders</td></tr>
+            <tr><td><code>currentTerm</code></td><td>the node forgets which election era it is in</td></tr>
+            <tr><td><code>log</code></td><td>committed entries could vanish</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Same durability as the storage engine</h4>
+        <p>
+          Persistence sits behind a <code>Storage</code> interface (in-memory for tests, file
+          for real use). The file implementation reuses the Phase-1 recipe exactly: encode the
+          state, write a temp file, fsync, rename over the live path, fsync the directory — so a
+          crash mid-save leaves either the old complete state or the new one.
+        </p>
+        <pre><code>type PersistentState struct {
+    CurrentTerm uint64
+    VotedFor    string
+    Log         []keva.Entry
+}
+
+type Storage interface {
+    Save(state PersistentState) error
+    Load() (PersistentState, error)
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Persist before acting.</span> Every transition that changes term,
+          vote, or log calls <code>persist()</code> before the node replies — becoming a
+          candidate, granting a vote, appending entries. On restart, <code>SetStorage</code>
+          loads the saved state and the node resumes exactly where it left off.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> A run loop with real timers — automatic election timeouts
+          and periodic heartbeats — and multi-node tests that exercise elections and
+          replication under a simulated network.
         </div>
 
         <div class="page-nav">

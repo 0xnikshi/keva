@@ -21,6 +21,7 @@ func (r *Raft) RequestVote(args RequestVoteArgs) RequestVoteReply {
 	canVote := r.votedFor == "" || r.votedFor == args.CandidateID
 	if canVote && r.candidateLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		r.votedFor = args.CandidateID
+		r.persist()
 		return RequestVoteReply{Term: r.currentTerm, VoteGranted: true}
 	}
 	return RequestVoteReply{Term: r.currentTerm, VoteGranted: false}
@@ -43,6 +44,7 @@ func (r *Raft) becomeCandidate() {
 	r.state = Candidate
 	r.currentTerm++
 	r.votedFor = r.id
+	r.persist()
 }
 
 // becomeLeader marks the node as leader and initializes per-peer

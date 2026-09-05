@@ -56,6 +56,8 @@ const CHAPTERS = [
       { id: "c4-skeleton", label: "Node Skeleton & State" },
       { id: "c4-election", label: "Leader Election" },
       { id: "c4-replication", label: "Log Replication" },
+      { id: "c4-apply", label: "Applying Entries" },
+      { id: "c4-persistence", label: "Persistence" },
     ],
   },
 ];
