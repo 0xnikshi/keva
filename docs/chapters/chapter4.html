@@ -134,10 +134,98 @@
           helpers freely — never double-locking a non-reentrant mutex.
         </div>
 
+        <h3 id="c4-election">Leader Election</h3>
+        <p>
+          A follower runs a randomized <b>election timeout</b>. If no heartbeat arrives in
+          time, it assumes the leader is gone, becomes a candidate, increments its term, votes
+          for itself, and sends <code>RequestVote</code> to every peer. A majority of votes
+          makes it leader.
+        </p>
+
+        <h4>The voting rules</h4>
+        <p>A node grants its vote only when all three hold:</p>
+        <ul>
+          <li>the candidate's term is not older than its own;</li>
+          <li>it has not already voted for someone else this term;</li>
+          <li>the candidate's log is <b>at least as up-to-date</b> as its own.</li>
+        </ul>
+        <pre><code>canVote := r.votedFor == "" || r.votedFor == args.CandidateID
+if canVote &amp;&amp; r.candidateLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
+    r.votedFor = args.CandidateID
+    return RequestVoteReply{Term: r.currentTerm, VoteGranted: true}
+}</code></pre>
+
         <div class="callout">
-          <span class="k">Next.</span> Leader election — the <code>RequestVote</code> RPC and the
-          randomized election timeout that turns a follower into a candidate and, with a
-          majority, into a leader.
+          <span class="k">The election restriction.</span> "Up-to-date" means: a higher last-log
+          term wins, and on equal terms the longer log wins. This is what prevents a node
+          missing committed entries from ever becoming leader — the guarantee that committed
+          data is never lost.
+        </div>
+
+        <h4>Randomized timeouts break ties</h4>
+        <p>
+          If two followers time out together they can split the vote and no one wins. Because
+          each timeout is randomized, one node almost always fires first next round and wins
+          cleanly, rather than the cluster deadlocking.
+        </p>
+
+        <h4>Testing without a network</h4>
+        <p>
+          Peer communication sits behind a <code>Transport</code> interface, so tests inject an
+          in-memory transport that routes <code>RequestVote</code> straight to peer objects.
+          Elections run deterministically, with no sockets and no flakiness — the same
+          technique production Raft implementations use.
+        </p>
+
+        <h3 id="c4-replication">Log Replication</h3>
+        <p>
+          The leader appends each client command to its own log, then copies it to followers
+          with the <code>AppendEntries</code> RPC. Once a majority store an entry it is
+          <b>committed</b> — safe forever. An <code>AppendEntries</code> with no entries is a
+          <b>heartbeat</b> that keeps followers from starting elections.
+        </p>
+
+        <h4>The log-matching check</h4>
+        <p>
+          Every <code>AppendEntries</code> carries <code>PrevLogIndex</code>/<code>PrevLogTerm</code>
+          — the entry that should sit just before the new ones. A follower accepts only if it
+          already holds a matching entry there. This single check inductively guarantees that
+          two logs agreeing at an index agree on everything before it.
+        </p>
+        <pre><code>if args.PrevLogIndex > r.lastLogIndex() {
+    return reply(false)                       // we're missing the preceding entry
+}
+if args.PrevLogIndex > 0 &amp;&amp; r.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+    return reply(false)                       // it exists but from a different term
+}</code></pre>
+        <p>
+          On rejection the leader decrements <code>nextIndex</code> for that follower and
+          retries with an earlier point, walking back until the logs align — then it ships
+          everything from there, overwriting any divergent tail.
+        </p>
+
+        <h4>Committing by majority</h4>
+        <p>
+          The leader tracks <code>matchIndex</code> — how far each follower's log matches. An
+          entry commits once a majority (including the leader) have it. Two subtleties are
+          safety-critical:
+        </p>
+        <ul>
+          <li>a follower adopts the leader's commit index only up to what it actually holds
+            (<code>min(LeaderCommit, lastLogIndex)</code>);</li>
+          <li>the leader counts toward commit only entries from <b>its own current term</b> —
+            never retroactively committing older-term entries by vote count alone.</li>
+        </ul>
+
+        <div class="callout">
+          <span class="k">Proven.</span> In a three-node cluster, a leader that submits a command
+          replicates it to both followers and advances its commit index to that entry — the
+          command is now durable across the cluster.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Apply committed entries to the state machine — feeding the
+          committed log into the storage engine so the replicated data becomes readable state.
         </div>
 
         <div class="page-nav">

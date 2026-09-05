@@ -54,6 +54,8 @@ const CHAPTERS = [
       { id: "c4-rpcs", label: "The Two RPCs" },
       { id: "c4-quorum", label: "Why Majority Works" },
       { id: "c4-skeleton", label: "Node Skeleton & State" },
+      { id: "c4-election", label: "Leader Election" },
+      { id: "c4-replication", label: "Log Replication" },
     ],
   },
 ];

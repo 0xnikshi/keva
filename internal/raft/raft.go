@@ -16,8 +16,9 @@ type Config struct {
 type Raft struct {
 	mu sync.Mutex
 
-	id    string
-	peers []string
+	id        string
+	peers     []string
+	transport Transport
 
 	// Persistent state: must be saved to stable storage before the node
 	// responds to an RPC, so it survives a crash. (Disk persistence is
@@ -27,15 +28,22 @@ type Raft struct {
 	log         []keva.Entry // the replicated command log (1-based indices)
 
 	// Volatile state, rebuilt on restart.
-	state State
+	state       State
+	commitIndex uint64 // highest log index known to be committed
+
+	// Leader-only volatile state, reset on each election.
+	nextIndex  map[string]uint64 // next log index to send to each peer
+	matchIndex map[string]uint64 // highest index known replicated on each peer
 }
 
-// New creates a node in the follower state at term 0 with an empty log.
-func New(cfg Config) *Raft {
+// New creates a node in the follower state at term 0 with an empty log,
+// using tr to reach its peers.
+func New(cfg Config, tr Transport) *Raft {
 	return &Raft{
-		id:    cfg.ID,
-		peers: cfg.Peers,
-		state: Follower,
+		id:        cfg.ID,
+		peers:     cfg.Peers,
+		transport: tr,
+		state:     Follower,
 	}
 }
 

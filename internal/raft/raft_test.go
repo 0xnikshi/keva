@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewStartsAsFollowerAtTermZero(t *testing.T) {
-	r := New(Config{ID: "n1", Peers: []string{"n2", "n3"}})
+	r := New(Config{ID: "n1", Peers: []string{"n2", "n3"}}, nil)
 
 	if got := r.State(); got != Follower {
 		t.Errorf("state = %s, want follower", got)
@@ -18,7 +18,7 @@ func TestNewStartsAsFollowerAtTermZero(t *testing.T) {
 }
 
 func TestLastLogIndexAndTerm(t *testing.T) {
-	r := New(Config{ID: "n1"})
+	r := New(Config{ID: "n1"}, nil)
 
 	if idx, term := r.lastLogIndex(), r.lastLogTerm(); idx != 0 || term != 0 {
 		t.Errorf("empty log: index=%d term=%d, want 0, 0", idx, term)
@@ -38,7 +38,7 @@ func TestLastLogIndexAndTerm(t *testing.T) {
 }
 
 func TestBecomeFollowerResetsVote(t *testing.T) {
-	r := New(Config{ID: "n1"})
+	r := New(Config{ID: "n1"}, nil)
 	r.state = Candidate
 	r.currentTerm = 2
 	r.votedFor = "n1"
