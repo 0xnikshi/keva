@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 5 · Replicated KV — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 5</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-5">
+        <p class="eyebrow">CHAPTER 5</p>
+        <h2 class="chapter-title">Replicated KV <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          Wire the Raft core to the storage engine so the cluster serves consistent reads and
+          writes: every write travels through consensus before it becomes visible.
+        </p>
+
+        <h3 id="c5-approach">Approach</h3>
+        <p>
+          Writes and reads take different paths. A write is proposed to Raft, replicated to a
+          majority, committed, and only then applied to the store — so every node applies the
+          same writes in the same order. A read is served from the local store, the materialized
+          result of that replicated log.
+        </p>
+        <pre><code>write:  client → server → raft.Submit → commit → Apply → store
+read:   client → server → store.Get</code></pre>
+
+        <h3 id="c5-fsm">The Store as State Machine</h3>
+        <p>
+          Raft applies committed commands to whatever satisfies its one-method
+          <code>StateMachine</code> interface. A small adapter bridges the store to it, keeping
+          Raft ignorant of storage and the store ignorant of consensus — the wiring lives in one
+          place.
+        </p>
+        <pre><code>func (f *Store) Apply(cmd keva.Command) {
+    switch cmd.Op {
+    case keva.OpPut:    f.store.Put(cmd.Key, cmd.Value)
+    case keva.OpDelete: f.store.Delete(cmd.Key)
+    }
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Design decision: the Raft log is the source of truth.</span> Once
+          writes flow through Raft, the Raft log already provides durability and ordering, so the
+          state machine is the simpler in-memory store, rebuilt by replaying the log. Keeping the
+          storage engine's own write-ahead log on top would mean logging everything twice. This
+          mirrors how etcd layers its key-value state on the Raft log.
+        </div>
+
+        <h3 id="c5-writepath">The Write Path</h3>
+        <p>
+          The server no longer writes to the store directly. It proposes the command through a
+          <code>Proposer</code> interface (satisfied by a Raft node) and lets consensus carry it
+          to the store. Reads still come straight from the store.
+        </p>
+        <pre><code>func (s *Server) handlePut(w, r) {
+    // ...decode body...
+    if _, err := s.raft.Submit(keva.Command{Op: OpPut, Key: key, Value: req.Value}); err != nil {
+        s.writeSubmitError(w, err)   // 503 if not the leader
+        return
+    }
+    w.WriteHeader(204)
+}</code></pre>
+        <p>
+          A write that reaches a non-leader fails with <code>503 Service Unavailable</code> — a
+          retryable signal. Routing the client to the actual leader comes in a later step; for now
+          the single-node daemon is always its own leader.
+        </p>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A write proposed through a real Raft node is replicated,
+          committed, applied to the state machine, and then read back — the full
+          consensus-to-storage path, exercised end to end. The <code>kevad</code> daemon now runs
+          a Raft node backing the store.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> A real HTTP transport for Raft RPCs between nodes, so the
+          single node becomes a true multi-node cluster.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter4.html"><span class="nav-dir">← Previous</span>Ch. 4 — Raft Consensus</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>

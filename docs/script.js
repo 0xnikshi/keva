@@ -61,6 +61,15 @@ const CHAPTERS = [
       { id: "c4-runloop", label: "The Run Loop" },
     ],
   },
+  {
+    label: "Ch. 5 — Replicated KV",
+    page: "chapters/chapter5.html",
+    sections: [
+      { id: "c5-approach", label: "Approach" },
+      { id: "c5-fsm", label: "Store as State Machine" },
+      { id: "c5-writepath", label: "The Write Path" },
+    ],
+  },
 ];
 
 const CHEVRON =

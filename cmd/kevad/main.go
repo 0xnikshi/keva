@@ -1,5 +1,6 @@
-// Command kevad is the Keva server daemon: it opens the durable store and
-// serves the HTTP API until it receives a shutdown signal.
+// Command kevad is the Keva server daemon: it runs a Raft node backing the
+// key-value store and serves the HTTP API until it receives a shutdown
+// signal.
 package main
 
 import (
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/0xnikshi/keva/internal/fsm"
+	"github.com/0xnikshi/keva/internal/raft"
 	"github.com/0xnikshi/keva/internal/server"
 	"github.com/0xnikshi/keva/internal/store"
 )
@@ -27,37 +30,31 @@ func main() {
 
 func run() error {
 	addr := flag.String("addr", ":7070", "address to listen on")
-	data := flag.String("data", "keva.wal", "path to the write-ahead log file")
+	id := flag.String("id", "n1", "this node's identifier")
 	flag.Parse()
 
-	st, err := store.OpenDurable(*data)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() {
-		if err := st.Close(); err != nil {
-			slog.Error("closing store", "err", err)
-		}
-	}()
+	// The replicated state machine: an in-memory store driven by the Raft
+	// log. (Multi-node networking and persistence come in later steps.)
+	mem := store.NewMemory()
+	node := raft.New(raft.Config{ID: *id}, nil)
+	node.SetStateMachine(fsm.New(mem))
+	node.Start()
+	defer node.Stop()
 
 	srv := &http.Server{
 		Addr:         *addr,
-		Handler:      server.New(st).Handler(),
+		Handler:      server.New(node, mem).Handler(),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// The context is cancelled when an interrupt or termination signal
-	// arrives, which is our cue to begin a graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// ListenAndServe blocks, so it runs in its own goroutine and reports
-	// any startup/serving error back through a buffered channel.
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("kevad listening", "addr", *addr, "data", *data)
+		slog.Info("kevad listening", "addr", *addr, "id", *id)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -70,8 +67,6 @@ func run() error {
 		slog.Info("shutdown signal received, draining in-flight requests")
 	}
 
-	// Stop accepting new connections and give in-flight requests a bounded
-	// window to finish before forcing the close.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

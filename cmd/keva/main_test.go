@@ -5,13 +5,29 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/0xnikshi/keva/internal/keva"
 	"github.com/0xnikshi/keva/internal/server"
 	"github.com/0xnikshi/keva/internal/store"
 )
 
+// applyProposer applies commands straight to a store, standing in for Raft
+// in the client's end-to-end tests.
+type applyProposer struct{ s store.Store }
+
+func (p applyProposer) Submit(cmd keva.Command) (uint64, error) {
+	switch cmd.Op {
+	case keva.OpPut:
+		_ = p.s.Put(cmd.Key, cmd.Value)
+	case keva.OpDelete:
+		_ = p.s.Delete(cmd.Key)
+	}
+	return 1, nil
+}
+
 func testClient(t *testing.T) *client {
 	t.Helper()
-	ts := httptest.NewServer(server.New(store.NewMemory()).Handler())
+	mem := store.NewMemory()
+	ts := httptest.NewServer(server.New(applyProposer{mem}, mem).Handler())
 	t.Cleanup(ts.Close)
 	return &client{addr: ts.URL, http: ts.Client()}
 }
