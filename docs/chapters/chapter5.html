@@ -82,9 +82,39 @@ read:   client → server → store.Get</code></pre>
           a Raft node backing the store.
         </div>
 
+        <h3 id="c5-transport">Node-to-Node Transport</h3>
+        <p>
+          The Raft core reaches peers through a <code>Transport</code> interface. The HTTP
+          implementation sends each RPC as a JSON POST to the peer's <code>/raft/*</code>
+          endpoint, addressing peers by ID through an id → URL map.
+        </p>
+        <pre><code>func (t *Transport) RequestVote(peer string, args raft.RequestVoteArgs) (raft.RequestVoteReply, error) {
+    var reply raft.RequestVoteReply
+    err := t.post(peer, "/raft/vote", args, &reply)
+    return reply, err
+}</code></pre>
+        <p>
+          Each daemon serves two route trees on one port: <code>/v1/*</code> for clients and
+          <code>/raft/*</code> for peers. An incoming RPC is decoded and handed straight to the
+          local node's <code>RequestVote</code> / <code>AppendEntries</code>.
+        </p>
+        <pre><code>mux.Handle("/v1/",   server.New(node, store).Handler())  // clients
+mux.Handle("/raft/", rafthttp.Handler(node))             // peers</code></pre>
+        <p>
+          Nodes are configured with <code>--id</code>, <code>--addr</code>, and
+          <code>--peers id=addr,…</code>. With no peers a node is a single-node cluster; with
+          peers it elects a leader and replicates over the network.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> A real HTTP transport for Raft RPCs between nodes, so the
-          single node becomes a true multi-node cluster.
+          <span class="k">Proven as a cluster.</span> Three nodes start, elect a single leader,
+          and a value written to the leader is read back identically from all three —
+          replication over real HTTP.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Leader forwarding — a write that lands on a follower is
+          routed to the current leader, so clients need not hunt for it.
         </div>
 
         <div class="page-nav">
