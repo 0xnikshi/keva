@@ -70,6 +70,7 @@ const CHAPTERS = [
       { id: "c5-writepath", label: "The Write Path" },
       { id: "c5-transport", label: "Node-to-Node Transport" },
       { id: "c5-forwarding", label: "Leader Forwarding" },
+      { id: "c5-reads", label: "Linearizable Reads" },
     ],
   },
 ];

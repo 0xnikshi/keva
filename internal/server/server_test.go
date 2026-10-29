@@ -35,14 +35,16 @@ func (p directProposer) Submit(cmd keva.Command) (uint64, error) {
 	}
 	return 1, nil
 }
-func (directProposer) Leader() string { return "n1" }
-func (directProposer) IsLeader() bool { return true }
+func (directProposer) ReadIndex() (uint64, error) { return 1, nil }
+func (directProposer) Leader() string             { return "n1" }
+func (directProposer) IsLeader() bool             { return true }
 
 // notLeaderProposer always reports that this node is a follower with no
 // known leader.
 type notLeaderProposer struct{}
 
 func (notLeaderProposer) Submit(keva.Command) (uint64, error) { return 0, raft.ErrNotLeader }
+func (notLeaderProposer) ReadIndex() (uint64, error)          { return 0, raft.ErrNotLeader }
 func (notLeaderProposer) Leader() string                      { return "" }
 func (notLeaderProposer) IsLeader() bool                      { return false }
 

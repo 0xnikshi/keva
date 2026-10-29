@@ -21,7 +21,8 @@ const maxBodySize = 1 << 20 // 1 MiB
 // Submit fails when this node is not the leader.
 type Proposer interface {
 	Submit(cmd keva.Command) (uint64, error)
-	Leader() string // ID of the current leader, "" if unknown
+	ReadIndex() (uint64, error) // confirm leadership for a linearizable read
+	Leader() string             // ID of the current leader, "" if unknown
 	IsLeader() bool
 }
 
@@ -57,6 +58,17 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
+	// Linearizable reads are served by the leader. Followers forward, and
+	// the leader confirms it still leads before reading its local store.
+	if !s.raft.IsLeader() {
+		s.forwardToLeader(w, r)
+		return
+	}
+	if _, err := s.raft.ReadIndex(); err != nil {
+		s.writeSubmitError(w, err)
+		return
+	}
+
 	key := keva.Key(r.PathValue("key"))
 
 	val, err := s.store.Get(key)

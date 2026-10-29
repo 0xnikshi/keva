@@ -138,9 +138,42 @@ mux.Handle("/raft/", rafthttp.Handler(node))             // peers</code></pre>
           nodes. Clients are freed from tracking leadership.
         </div>
 
+        <h3 id="c5-reads">Linearizable Reads</h3>
+        <p>
+          Reading from any local store risks stale data: a follower may lag, or a deposed leader
+          may not yet know it was replaced. A linearizable read must reflect the latest committed
+          write, so reads are served by the leader using the ReadIndex protocol.
+        </p>
+        <ol>
+          <li>Followers forward reads to the leader, as they do writes.</li>
+          <li>The leader records its commit index, then heartbeats a majority to confirm it is
+            still the leader — ruling out a newer leader that may have committed writes it has not
+            seen.</li>
+          <li>With leadership confirmed and the state machine applied up to that index, it reads
+            its local store.</li>
+        </ol>
+        <pre><code>if _, err := s.raft.ReadIndex(); err != nil {   // confirm leadership
+    s.writeSubmitError(w, err)
+    return
+}
+val, err := s.store.Get(key)                     // now linearizable</code></pre>
+
         <div class="callout">
-          <span class="k">Next.</span> Linearizable reads — serving reads that always reflect the
-          latest committed write, rather than possibly-stale local state.
+          <span class="k">Proven.</span> A value written through the leader is read back
+          immediately and identically from every node — no replication-lag window — because all
+          reads resolve against the leader's confirmed, committed state.
+        </div>
+
+        <div class="callout">
+          <span class="k">Trade-off.</span> Every read now costs a heartbeat round to confirm
+          leadership, and all reads funnel through the leader. That is the price of
+          linearizability; systems that tolerate slightly stale reads often add a faster
+          "read from any follower" mode too.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Cluster end-to-end tests — election, replication, and
+          forwarding exercised together, including surviving a node failure.
         </div>
 
         <div class="page-nav">
