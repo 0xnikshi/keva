@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-5">
         <p class="eyebrow">CHAPTER 5</p>
-        <h2 class="chapter-title">Replicated KV <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Replicated KV <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           Wire the Raft core to the storage engine so the cluster serves consistent reads and
           writes: every write travels through consensus before it becomes visible.
@@ -171,9 +171,27 @@ val, err := s.store.Get(key)                     // now linearizable</code></pre
           "read from any follower" mode too.
         </div>
 
+        <h3 id="c5-e2e">End-to-End Tests</h3>
+        <p>
+          The node wiring — Raft over the HTTP transport, the store as state machine, and the
+          client and peer handlers — is bundled into one <code>cluster.Node</code>, used by both
+          the daemon and the tests. The end-to-end tests stand up an in-process cluster of such
+          nodes talking over real HTTP and drive it like a client.
+        </p>
+        <table>
+          <thead><tr><th>Test</th><th>Proves</th></tr></thead>
+          <tbody>
+            <tr><td>write, forward &amp; read</td><td>a write sent to a follower is forwarded, then read back identically from every node</td></tr>
+            <tr><td>survives leader failure</td><td>after the leader is stopped and made unreachable, the survivors elect a new leader and keep serving</td></tr>
+          </tbody>
+        </table>
+
         <div class="callout">
-          <span class="k">Next.</span> Cluster end-to-end tests — election, replication, and
-          forwarding exercised together, including surviving a node failure.
+          <span class="k">Chapter complete.</span> Keva is now a fault-tolerant, strongly
+          consistent, distributed key-value store: writes travel through Raft and replicate to a
+          majority, reads are linearizable, clients can talk to any node, and the cluster
+          survives a node failure. Next chapter: cluster operations — snapshotting and dynamic
+          membership.
         </div>
 
         <div class="page-nav">

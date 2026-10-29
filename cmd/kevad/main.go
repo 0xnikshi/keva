@@ -16,11 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/0xnikshi/keva/internal/fsm"
-	"github.com/0xnikshi/keva/internal/raft"
-	"github.com/0xnikshi/keva/internal/rafthttp"
-	"github.com/0xnikshi/keva/internal/server"
-	"github.com/0xnikshi/keva/internal/store"
+	"github.com/0xnikshi/keva/internal/cluster"
 )
 
 func main() {
@@ -36,26 +32,18 @@ func run() error {
 	peersFlag := flag.String("peers", "", "comma-separated id=addr of the other nodes")
 	flag.Parse()
 
-	peers, peerIDs, err := parsePeers(*peersFlag)
+	peerURLs, peerIDs, err := parsePeers(*peersFlag)
 	if err != nil {
 		return err
 	}
 
-	// The replicated state machine: an in-memory store driven by the Raft
-	// log, reached over an HTTP transport. (Persistence comes in a later step.)
-	mem := store.NewMemory()
-	node := raft.New(raft.Config{ID: *id, Peers: peerIDs}, rafthttp.New(peers))
-	node.SetStateMachine(fsm.New(mem))
+	node := cluster.New(cluster.Config{ID: *id, PeerIDs: peerIDs, PeerURLs: peerURLs})
 	node.Start()
 	defer node.Stop()
 
-	mux := http.NewServeMux()
-	mux.Handle("/v1/", server.New(node, mem, peers).Handler())
-	mux.Handle("/raft/", rafthttp.Handler(node))
-
 	srv := &http.Server{
 		Addr:         *addr,
-		Handler:      mux,
+		Handler:      node.Handler(),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,

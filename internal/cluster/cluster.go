@@ -1,0 +1,64 @@
+// Package cluster wires a Raft node, its state-machine store, and the HTTP
+// handlers for client and peer traffic into one unit.
+package cluster
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/0xnikshi/keva/internal/fsm"
+	"github.com/0xnikshi/keva/internal/raft"
+	"github.com/0xnikshi/keva/internal/rafthttp"
+	"github.com/0xnikshi/keva/internal/server"
+	"github.com/0xnikshi/keva/internal/store"
+)
+
+// Config configures a cluster node.
+type Config struct {
+	ID       string
+	PeerIDs  []string          // identifiers of the other nodes
+	PeerURLs map[string]string // peer ID → base URL (may be filled after New)
+
+	ElectionTimeout   time.Duration // zero → Raft default
+	HeartbeatInterval time.Duration // zero → Raft default
+}
+
+// Node is a fully wired Keva node: Raft consensus over an HTTP transport, an
+// in-memory store as the state machine, and a combined HTTP handler serving
+// both client (/v1) and peer (/raft) routes.
+type Node struct {
+	raft    *raft.Raft
+	handler http.Handler
+}
+
+// New builds, but does not start, a node from cfg. PeerURLs is held by
+// reference, so it may be populated after New and before Start.
+func New(cfg Config) *Node {
+	mem := store.NewMemory()
+
+	r := raft.New(raft.Config{
+		ID:                cfg.ID,
+		Peers:             cfg.PeerIDs,
+		ElectionTimeout:   cfg.ElectionTimeout,
+		HeartbeatInterval: cfg.HeartbeatInterval,
+	}, rafthttp.New(cfg.PeerURLs))
+	r.SetStateMachine(fsm.New(mem))
+
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", server.New(r, mem, cfg.PeerURLs).Handler())
+	mux.Handle("/raft/", rafthttp.Handler(r))
+
+	return &Node{raft: r, handler: mux}
+}
+
+// Handler returns the node's HTTP handler.
+func (n *Node) Handler() http.Handler { return n.handler }
+
+// Start runs the Raft loop.
+func (n *Node) Start() { n.raft.Start() }
+
+// Stop halts the Raft loop.
+func (n *Node) Stop() { n.raft.Stop() }
+
+// IsLeader reports whether this node is currently the leader.
+func (n *Node) IsLeader() bool { return n.raft.IsLeader() }

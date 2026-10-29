@@ -71,6 +71,7 @@ const CHAPTERS = [
       { id: "c5-transport", label: "Node-to-Node Transport" },
       { id: "c5-forwarding", label: "Leader Forwarding" },
       { id: "c5-reads", label: "Linearizable Reads" },
+      { id: "c5-e2e", label: "End-to-End Tests" },
     ],
   },
 ];
