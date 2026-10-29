@@ -50,7 +50,7 @@ func run() error {
 	defer node.Stop()
 
 	mux := http.NewServeMux()
-	mux.Handle("/v1/", server.New(node, mem).Handler())
+	mux.Handle("/v1/", server.New(node, mem, peers).Handler())
 	mux.Handle("/raft/", rafthttp.Handler(node))
 
 	srv := &http.Server{

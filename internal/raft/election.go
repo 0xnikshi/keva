@@ -45,6 +45,7 @@ func (r *Raft) becomeCandidate() {
 	r.state = Candidate
 	r.currentTerm++
 	r.votedFor = r.id
+	r.leaderID = "" // no recognized leader while campaigning
 	r.persist()
 }
 
@@ -52,6 +53,7 @@ func (r *Raft) becomeCandidate() {
 // replication tracking. Caller holds r.mu.
 func (r *Raft) becomeLeader() {
 	r.state = Leader
+	r.leaderID = r.id
 	r.nextIndex = make(map[string]uint64, len(r.peers))
 	r.matchIndex = make(map[string]uint64, len(r.peers))
 	last := r.lastLogIndex()

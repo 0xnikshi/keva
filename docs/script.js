@@ -69,6 +69,7 @@ const CHAPTERS = [
       { id: "c5-fsm", label: "Store as State Machine" },
       { id: "c5-writepath", label: "The Write Path" },
       { id: "c5-transport", label: "Node-to-Node Transport" },
+      { id: "c5-forwarding", label: "Leader Forwarding" },
     ],
   },
 ];

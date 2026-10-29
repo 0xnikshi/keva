@@ -35,15 +35,20 @@ func (p directProposer) Submit(cmd keva.Command) (uint64, error) {
 	}
 	return 1, nil
 }
+func (directProposer) Leader() string { return "n1" }
+func (directProposer) IsLeader() bool { return true }
 
-// notLeaderProposer always reports that this node is not the leader.
+// notLeaderProposer always reports that this node is a follower with no
+// known leader.
 type notLeaderProposer struct{}
 
 func (notLeaderProposer) Submit(keva.Command) (uint64, error) { return 0, raft.ErrNotLeader }
+func (notLeaderProposer) Leader() string                      { return "" }
+func (notLeaderProposer) IsLeader() bool                      { return false }
 
 func newTestServer() http.Handler {
 	mem := store.NewMemory()
-	return New(directProposer{mem}, mem).Handler()
+	return New(directProposer{mem}, mem, nil).Handler()
 }
 
 func do(t *testing.T, h http.Handler, method, target string, body []byte) *httptest.ResponseRecorder {
@@ -123,7 +128,7 @@ func TestPutBodyTooLargeReturns413(t *testing.T) {
 }
 
 func TestPutWhenNotLeaderReturns503(t *testing.T) {
-	h := New(notLeaderProposer{}, store.NewMemory()).Handler()
+	h := New(notLeaderProposer{}, store.NewMemory(), nil).Handler()
 
 	body, _ := json.Marshal(api.PutRequest{Value: []byte("v")})
 	if w := do(t, h, http.MethodPut, "/v1/kv/k", body); w.Code != http.StatusServiceUnavailable {
@@ -152,7 +157,7 @@ func TestWriteGoesThroughRaft(t *testing.T) {
 		t.Fatal("single node did not become leader")
 	}
 
-	h := New(node, mem).Handler()
+	h := New(node, mem, nil).Handler()
 
 	body, _ := json.Marshal(api.PutRequest{Value: []byte("hello")})
 	if w := do(t, h, http.MethodPut, "/v1/kv/greeting", body); w.Code != http.StatusNoContent {

@@ -23,11 +23,13 @@ func (p applyProposer) Submit(cmd keva.Command) (uint64, error) {
 	}
 	return 1, nil
 }
+func (applyProposer) Leader() string { return "n1" }
+func (applyProposer) IsLeader() bool { return true }
 
 func testClient(t *testing.T) *client {
 	t.Helper()
 	mem := store.NewMemory()
-	ts := httptest.NewServer(server.New(applyProposer{mem}, mem).Handler())
+	ts := httptest.NewServer(server.New(applyProposer{mem}, mem, nil).Handler())
 	t.Cleanup(ts.Close)
 	return &client{addr: ts.URL, http: ts.Client()}
 }

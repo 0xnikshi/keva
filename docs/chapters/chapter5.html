@@ -112,9 +112,35 @@ mux.Handle("/raft/", rafthttp.Handler(node))             // peers</code></pre>
           replication over real HTTP.
         </div>
 
+        <h3 id="c5-forwarding">Leader Forwarding</h3>
+        <p>
+          Only the leader may accept writes, but a client should be able to talk to any node. A
+          follower that receives a write forwards it to the current leader and relays the
+          response, so the client never has to find the leader itself.
+        </p>
+        <pre><code>func (s *Server) handlePut(w, r) {
+    if !s.raft.IsLeader() {
+        s.forwardToLeader(w, r)   // proxy to the leader, relay its reply
+        return
+    }
+    // ...leader: decode and Submit...
+}</code></pre>
+        <p>
+          Each node knows the leader because a valid <code>AppendEntries</code> carries the
+          leader's ID; the node records it and maps it to a URL through the same peer map the
+          transport uses. When no leader is known yet, the write gets a retryable
+          <code>503</code>.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Leader forwarding — a write that lands on a follower is
-          routed to the current leader, so clients need not hunt for it.
+          <span class="k">Proven.</span> With three nodes running, a write sent to any node —
+          leader or follower — is accepted, and every key reads back consistently from all
+          nodes. Clients are freed from tracking leadership.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Linearizable reads — serving reads that always reflect the
+          latest committed write, rather than possibly-stale local state.
         </div>
 
         <div class="page-nav">

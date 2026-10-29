@@ -35,6 +35,7 @@ type Raft struct {
 
 	// Volatile state, rebuilt on restart.
 	state       State
+	leaderID    string // the leader this node currently recognizes, "" if unknown
 	commitIndex uint64 // highest log index known to be committed
 	lastApplied uint64 // highest log index applied to the state machine
 
@@ -109,5 +110,21 @@ func (r *Raft) becomeFollower(term uint64) {
 	r.state = Follower
 	r.currentTerm = term
 	r.votedFor = ""
+	r.leaderID = "" // leader unknown until the next heartbeat
 	r.persist()
+}
+
+// Leader returns the ID of the leader this node currently recognizes, or
+// "" if none is known.
+func (r *Raft) Leader() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.leaderID
+}
+
+// IsLeader reports whether this node is currently the leader.
+func (r *Raft) IsLeader() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == Leader
 }
