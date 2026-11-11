@@ -74,6 +74,15 @@ const CHAPTERS = [
       { id: "c5-e2e", label: "End-to-End Tests" },
     ],
   },
+  {
+    label: "Ch. 6 — Cluster Operations",
+    page: "chapters/chapter6.html",
+    sections: [
+      { id: "c6-persistence", label: "Persistence & Recovery" },
+      { id: "c6-snapshotting", label: "Snapshotting" },
+      { id: "c6-installsnapshot", label: "Catching Up a Follower" },
+    ],
+  },
 ];
 
 const CHEVRON =

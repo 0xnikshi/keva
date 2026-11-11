@@ -50,6 +50,14 @@ func (t *memTransport) AppendEntries(peer string, args AppendEntriesArgs) (Appen
 	return n.AppendEntries(args), nil
 }
 
+func (t *memTransport) InstallSnapshot(peer string, args InstallSnapshotArgs) (InstallSnapshotReply, error) {
+	n, ok := t.target(peer)
+	if !ok {
+		return InstallSnapshotReply{}, fmt.Errorf("peer %q unreachable", peer)
+	}
+	return n.InstallSnapshot(args), nil
+}
+
 func newCluster(ids ...string) map[string]*Raft {
 	tr := &memTransport{nodes: map[string]*Raft{}, down: map[string]bool{}}
 	for _, id := range ids {

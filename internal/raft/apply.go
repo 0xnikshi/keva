@@ -2,9 +2,12 @@ package raft
 
 import "github.com/0xnikshi/keva/internal/keva"
 
-// StateMachine applies committed commands to produce the replicated state.
+// StateMachine applies committed commands to produce the replicated state,
+// and can snapshot and restore that state for log compaction.
 type StateMachine interface {
 	Apply(cmd keva.Command)
+	Snapshot() ([]byte, error)
+	Restore(data []byte) error
 }
 
 // SetStateMachine attaches the state machine that committed entries are
@@ -28,10 +31,13 @@ func (r *Raft) applyCommitted() {
 		return
 	}
 	from, to := r.lastApplied, r.commitIndex
-	entries := append([]keva.Entry(nil), r.log[from:to]...)
+	entries := append([]keva.Entry(nil), r.log[from-r.logBase:to-r.logBase]...)
 	r.mu.Unlock()
 
 	for _, e := range entries {
+		if e.Command.Op == 0 {
+			continue // no-op entry (leader election marker); nothing to apply
+		}
 		r.sm.Apply(e.Command)
 	}
 

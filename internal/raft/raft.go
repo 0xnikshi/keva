@@ -31,7 +31,14 @@ type Raft struct {
 	// wired up in a later step; for now it lives in memory.)
 	currentTerm uint64       // latest term the node has seen
 	votedFor    string       // candidate voted for in currentTerm; "" if none
-	log         []keva.Entry // the replicated command log (1-based indices)
+	log         []keva.Entry // the replicated command log (indices start at logBase+1)
+
+	// Snapshot state. A snapshot folds every entry up to logBase into a
+	// state-machine image, letting the log discard that prefix. logBase is 0
+	// until the first snapshot, after which the log holds only entries past it.
+	logBase     uint64    // index of the last entry captured by the snapshot
+	logBaseTerm uint64    // term of that entry
+	snapshot    *Snapshot // latest snapshot, nil if none taken yet
 
 	// Volatile state, rebuilt on restart.
 	state       State
@@ -87,20 +94,36 @@ func (r *Raft) Term() uint64 {
 	return r.currentTerm
 }
 
-// lastLogIndex returns the index of the last log entry, or 0 when the log
-// is empty. Indices are 1-based: slice position i holds entry i+1.
-// The caller must hold r.mu.
+// lastLogIndex returns the index of the last log entry. Entries up to
+// logBase have been compacted into the snapshot, so the last index is
+// logBase plus the number of entries still held. The caller must hold r.mu.
 func (r *Raft) lastLogIndex() uint64 {
-	return uint64(len(r.log))
+	return r.logBase + uint64(len(r.log))
 }
 
-// lastLogTerm returns the term of the last log entry, or 0 when empty.
+// lastLogTerm returns the term of the last log entry. When the log holds no
+// entries of its own, it falls back to the snapshot's last included term.
 // The caller must hold r.mu.
 func (r *Raft) lastLogTerm() uint64 {
 	if len(r.log) == 0 {
-		return 0
+		return r.logBaseTerm
 	}
 	return r.log[len(r.log)-1].Term
+}
+
+// termAt returns the term of the entry at the given log index. index 0 (no
+// entry) has term 0; index == logBase refers to the snapshot's last included
+// entry. The index must not be below logBase, as those entries are compacted
+// away. The caller must hold r.mu.
+func (r *Raft) termAt(index uint64) uint64 {
+	switch {
+	case index == 0 || index < r.logBase:
+		return 0
+	case index == r.logBase:
+		return r.logBaseTerm
+	default:
+		return r.log[index-r.logBase-1].Term
+	}
 }
 
 // becomeFollower steps the node down to follower for the given term,

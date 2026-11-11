@@ -31,27 +31,35 @@ func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 
 	// Log matching: we must already hold the entry preceding the new ones,
 	// with the same term. Otherwise reject so the leader backs up and retries.
+	// Entries at or below logBase are already captured by our snapshot and
+	// known good, so the term check only applies from logBase onward.
 	if args.PrevLogIndex > r.lastLogIndex() {
 		reply := AppendEntriesReply{Term: r.currentTerm, Success: false}
 		r.mu.Unlock()
 		return reply
 	}
-	if args.PrevLogIndex > 0 && r.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+	if args.PrevLogIndex >= r.logBase && args.PrevLogIndex > 0 &&
+		r.termAt(args.PrevLogIndex) != args.PrevLogTerm {
 		reply := AppendEntriesReply{Term: r.currentTerm, Success: false}
 		r.mu.Unlock()
 		return reply
 	}
 
 	// Append new entries, truncating the first conflicting entry and
-	// everything after it.
+	// everything after it. Entries already folded into the snapshot are
+	// skipped rather than re-stored.
 	for i := range args.Entries {
 		idx := args.PrevLogIndex + uint64(i) + 1
+		if idx <= r.logBase {
+			continue
+		}
+		pos := idx - r.logBase - 1
 		if idx > r.lastLogIndex() {
 			r.log = append(r.log, args.Entries[i:]...)
 			break
 		}
-		if r.log[idx-1].Term != args.Entries[i].Term {
-			r.log = append(r.log[:idx-1], args.Entries[i:]...)
+		if r.log[pos].Term != args.Entries[i].Term {
+			r.log = append(r.log[:pos], args.Entries[i:]...)
 			break
 		}
 	}
@@ -121,11 +129,20 @@ func (r *Raft) replicateTo(peer string, term uint64) {
 			return
 		}
 		prevIndex := r.nextIndex[peer] - 1
+		if prevIndex < r.logBase {
+			// The entries this peer needs are compacted away; send it the
+			// snapshot to catch up, then let a later round resume from the
+			// boundary with ordinary AppendEntries.
+			snap := r.snapshot
+			r.mu.Unlock()
+			r.sendSnapshot(peer, term, snap)
+			return
+		}
 		var prevTerm uint64
 		if prevIndex > 0 {
-			prevTerm = r.log[prevIndex-1].Term
+			prevTerm = r.termAt(prevIndex)
 		}
-		entries := append([]keva.Entry(nil), r.log[prevIndex:]...)
+		entries := append([]keva.Entry(nil), r.log[prevIndex-r.logBase:]...)
 		args := AppendEntriesArgs{
 			Term:         term,
 			LeaderID:     r.id,
@@ -171,7 +188,7 @@ func (r *Raft) advanceCommit() {
 	for n := r.lastLogIndex(); n > r.commitIndex; n-- {
 		// A leader only commits an entry by counting once it is from the
 		// leader's own term (a core Raft safety rule).
-		if r.log[n-1].Term != r.currentTerm {
+		if r.termAt(n) != r.currentTerm {
 			continue
 		}
 		count := 1 // the leader holds it

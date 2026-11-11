@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 6 · Cluster Operations — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 6</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-6">
+        <p class="eyebrow">CHAPTER 6</p>
+        <h2 class="chapter-title">Cluster Operations <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          Make the cluster durable and elastic: recover state after a crash, compact the log so
+          it does not grow forever, and change membership on a running cluster.
+        </p>
+
+        <h3 id="c6-persistence">Persistence &amp; Recovery</h3>
+        <p>
+          When Raft was first wired in, each node kept its log only in memory — a restart lost
+          everything. Now the Raft state (term, vote, log) is persisted to disk with the same
+          crash-safe recipe used throughout Keva: encode, write a temp file, fsync, rename,
+          fsync the directory.
+        </p>
+
+        <h4>Rebuilding the store on restart</h4>
+        <p>
+          The state machine — the in-memory store — is <em>not</em> persisted. It is rebuilt on
+          every restart by replaying the recovered log. Because applying a command is idempotent,
+          replaying the whole committed log reconstructs exactly the state that was lost.
+        </p>
+
+        <div class="callout">
+          <span class="k">The recovery subtlety.</span> On restart the log is reloaded, but the
+          commit index is volatile and starts at zero. Raft's safety rule says a leader may only
+          commit entries from its <em>own</em> term by counting replicas — so the reloaded,
+          older-term entries would never re-commit, and never re-apply. The store would stay
+          empty.
+        </div>
+
+        <h4>The no-op on election</h4>
+        <p>
+          The fix is a classic Raft technique: when a node becomes leader it appends a <b>no-op
+          entry</b> in its current term. Committing that no-op advances the commit index past all
+          the older entries, which then apply in order — rebuilding the store. No-op entries carry
+          no command, so they are skipped when applying.
+        </p>
+        <pre><code>func (r *Raft) becomeLeader() {
+    r.state = Leader
+    // A no-op in the current term; committing it re-commits (and re-applies)
+    // everything before it — how a restarted cluster recovers its state.
+    r.log = append(r.log, keva.Entry{Term: r.currentTerm, Index: r.lastLogIndex() + 1})
+    r.persist()
+    // ...initialize per-peer replication...
+}</code></pre>
+
+        <h4>Wiring</h4>
+        <p>
+          A node is given a storage path (the daemon's <code>--data</code> directory, one file
+          per node). With a path set, <code>cluster.New</code> loads any saved state before the
+          node starts and saves on every state change; with no path it runs in memory.
+        </p>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A value written to a running daemon survives killing the
+          process and restarting it on the same data directory — recovered by replaying the
+          persisted Raft log.
+        </div>
+
+        <h3 id="c6-snapshotting">Snapshotting</h3>
+        <p>
+          The log only ever grows. Every write appends an entry, and a key written a thousand
+          times keeps all thousand records even though only the last one matters. Left alone, the
+          log consumes unbounded disk and makes restart recovery — which replays it — ever slower.
+          Snapshotting breaks the cycle: the state machine already holds the <em>result</em> of the
+          log, so we save that image and discard the entries that produced it.
+        </p>
+
+        <h4>The index problem</h4>
+        <p>
+          Discarding the front of the log breaks the one assumption the rest of Raft was built on:
+          that entry <code>N</code> sits at slice position <code>N-1</code>. Once a prefix is gone,
+          that arithmetic is wrong everywhere it appears. The fix is a single offset,
+          <code>logBase</code> — the index of the last entry folded into the snapshot. The slice
+          now holds entries <code>logBase+1</code> onward, and one helper resolves any index
+          through it, so the handler, the replicator, and commit-advance never index the log raw.
+        </p>
+        <pre><code>// termAt returns the term of the entry at a log index, accounting for the
+// compacted prefix. index == logBase refers to the snapshot's last entry.
+func (r *Raft) termAt(index uint64) uint64 {
+    switch {
+    case index == 0 || index &lt; r.logBase: return 0
+    case index == r.logBase:               return r.logBaseTerm
+    default:                               return r.log[index-r.logBase-1].Term
+    }
+}</code></pre>
+
+        <h4>Taking a snapshot</h4>
+        <p>
+          Compaction captures the state machine as of <code>lastApplied</code>, then drops every
+          log entry up to that index. It holds the apply lock for the whole operation so no entry
+          is applied between reading the index and capturing the image — the image and the boundary
+          it claims to cover must agree.
+        </p>
+        <pre><code>func (r *Raft) Snapshot(threshold int) (bool, error) {
+    r.applyMu.Lock(); defer r.applyMu.Unlock()
+    // ...skip if the log is short or nothing new is applied...
+    data, _ := r.sm.Snapshot()           // state-machine image at lastApplied
+    r.log = r.log[snapIndex-r.logBase:]   // discard the compacted prefix
+    r.logBase, r.logBaseTerm = snapIndex, snapTerm
+    r.snapshot = &amp;Snapshot{LastIncludedIndex: snapIndex, LastIncludedTerm: snapTerm, Data: data}
+    r.persist()
+    return true, nil
+}</code></pre>
+
+        <h4>Recovery from a snapshot</h4>
+        <p>
+          The snapshot is persisted alongside the log in the same crash-safe file. On restart, the
+          state machine is rebuilt from the image in one step — <code>Restore(data)</code>, no
+          replay — and the log resumes past the boundary. The few entries committed after the last
+          snapshot replay normally once a leader re-confirms them.
+        </p>
+        <pre><code>if ps.Snapshot != nil {
+    r.sm.Restore(ps.Snapshot.Data)             // rebuild state instantly
+    r.logBase = ps.Snapshot.LastIncludedIndex  // log resumes after the boundary
+    r.commitIndex, r.lastApplied = r.logBase, r.logBase
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A node commits a run of writes, snapshots, and its log
+          shrinks while <code>lastLogIndex</code> is unchanged and the next write still lands at the
+          correct index. A fresh node rebuilt from the same file recovers its full state from the
+          snapshot image alone, with no log to replay.
+        </div>
+
+        <h3 id="c6-installsnapshot">Catching Up a Follower</h3>
+        <p>
+          Compaction creates a gap. Ordinary replication works by sending a follower the entries
+          <em>after</em> the last one it holds — but once the leader has compacted past that point,
+          those entries no longer exist as log entries. A follower that was partitioned or crashed
+          through a snapshot can never be caught up entry by entry: the history it needs is gone.
+        </p>
+        <p>
+          The answer is to send the result instead of the steps. When a follower trails the
+          leader's snapshot boundary, the leader ships it the whole state-machine image in one
+          <b>InstallSnapshot</b> RPC. The follower adopts it — restoring its state machine and
+          resuming its log from the boundary — and the next round resumes ordinary replication for
+          anything newer. The snapshot is a one-time jump to catch up, not the steady-state path.
+        </p>
+        <pre><code>// In replicateTo: the peer's next entry is already compacted away.
+if prevIndex &lt; r.logBase {
+    snap := r.snapshot
+    r.mu.Unlock()
+    r.sendSnapshot(peer, term, snap)  // ship the image, then resume normally
+    return
+}</code></pre>
+
+        <h4>Installing it</h4>
+        <p>
+          The receiver does the same term check as every RPC, then adopts the image: restore the
+          state machine, move the log boundary, and advance its commit and applied indices to it.
+          If it still holds the boundary entry and it matches, the tail past it is kept rather than
+          discarded — a follower only slightly behind loses nothing it already had.
+        </p>
+        <pre><code>r.sm.Restore(args.Data)                       // rebuild state from the image
+r.logBase, r.logBaseTerm = args.LastIncludedIndex, args.LastIncludedTerm
+r.commitIndex, r.lastApplied = max them to the boundary</code></pre>
+
+        <div class="callout">
+          <span class="k">Serialized with apply.</span> Installing a snapshot restores the store,
+          and applying committed entries writes to that same store. Both take the apply lock in the
+          one order used throughout — apply lock before the state lock — so they never touch the
+          store at once, and the race detector stays clean.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A follower kept offline while the leader commits writes and
+          then compacts them away rejoins with no log entries left to replay — yet recovers the
+          full state through InstallSnapshot and adopts the leader's snapshot boundary. The RPC
+          travels over a dedicated HTTP endpoint, so a real networked cluster catches up a lagging
+          node the same way.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Dynamic membership — adding and removing nodes from a running
+          cluster without downtime or split brain.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter5.html"><span class="nav-dir">← Previous</span>Ch. 5 — Replicated KV</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>

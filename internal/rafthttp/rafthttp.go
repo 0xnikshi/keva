@@ -40,6 +40,13 @@ func (t *Transport) AppendEntries(peer string, args raft.AppendEntriesArgs) (raf
 	return reply, err
 }
 
+// InstallSnapshot sends an InstallSnapshot RPC to peer.
+func (t *Transport) InstallSnapshot(peer string, args raft.InstallSnapshotArgs) (raft.InstallSnapshotReply, error) {
+	var reply raft.InstallSnapshotReply
+	err := t.post(peer, "/raft/snapshot", args, &reply)
+	return reply, err
+}
+
 func (t *Transport) post(peer, path string, args, reply any) error {
 	base, ok := t.peers[peer]
 	if !ok {
@@ -82,6 +89,15 @@ func Handler(node *raft.Raft) http.Handler {
 			return
 		}
 		writeJSON(w, node.AppendEntries(args))
+	})
+
+	mux.HandleFunc("POST /raft/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		var args raft.InstallSnapshotArgs
+		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, node.InstallSnapshot(args))
 	})
 
 	return mux

@@ -12,11 +12,13 @@ import (
 
 // PersistentState is the subset of a node's state that must survive a
 // crash: without it, a restarted node could vote twice in one term or lose
-// committed entries.
+// committed entries. Snapshot, when present, carries the compacted log prefix
+// as a state-machine image; Log then holds only the entries past it.
 type PersistentState struct {
 	CurrentTerm uint64
 	VotedFor    string
 	Log         []keva.Entry
+	Snapshot    *Snapshot
 }
 
 // Storage persists and restores a node's persistent Raft state.
@@ -39,6 +41,23 @@ func (r *Raft) SetStorage(s Storage) error {
 	r.currentTerm = ps.CurrentTerm
 	r.votedFor = ps.VotedFor
 	r.log = ps.Log
+
+	// Recover from a snapshot: restore the state machine to the image, then
+	// resume the log past the snapshot boundary. commitIndex/lastApplied are
+	// volatile and start at the boundary — the entries after it are replayed
+	// once the leader re-establishes their commit index.
+	if ps.Snapshot != nil {
+		if r.sm != nil {
+			if err := r.sm.Restore(ps.Snapshot.Data); err != nil {
+				return err
+			}
+		}
+		r.snapshot = ps.Snapshot
+		r.logBase = ps.Snapshot.LastIncludedIndex
+		r.logBaseTerm = ps.Snapshot.LastIncludedTerm
+		r.commitIndex = r.logBase
+		r.lastApplied = r.logBase
+	}
 	return nil
 }
 
@@ -53,6 +72,7 @@ func (r *Raft) persist() {
 		CurrentTerm: r.currentTerm,
 		VotedFor:    r.votedFor,
 		Log:         r.log,
+		Snapshot:    r.snapshot,
 	})
 }
 

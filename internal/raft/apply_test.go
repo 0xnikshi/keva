@@ -25,6 +25,9 @@ func (s *recordingSM) count() int {
 	return len(s.applied)
 }
 
+func (*recordingSM) Snapshot() ([]byte, error) { return nil, nil }
+func (*recordingSM) Restore([]byte) error      { return nil }
+
 func TestCommittedEntriesAreApplied(t *testing.T) {
 	nodes := newCluster("n1", "n2", "n3")
 	sms := make(map[string]*recordingSM)

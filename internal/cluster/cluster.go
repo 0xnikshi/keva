@@ -19,6 +19,8 @@ type Config struct {
 	PeerIDs  []string          // identifiers of the other nodes
 	PeerURLs map[string]string // peer ID → base URL (may be filled after New)
 
+	StoragePath string // file for persistent Raft state; "" → in-memory
+
 	ElectionTimeout   time.Duration // zero → Raft default
 	HeartbeatInterval time.Duration // zero → Raft default
 }
@@ -32,8 +34,10 @@ type Node struct {
 }
 
 // New builds, but does not start, a node from cfg. PeerURLs is held by
-// reference, so it may be populated after New and before Start.
-func New(cfg Config) *Node {
+// reference, so it may be populated after New and before Start. When
+// StoragePath is set, persistent state is loaded from it (recovering a
+// crashed node) and saved to it going forward.
+func New(cfg Config) (*Node, error) {
 	mem := store.NewMemory()
 
 	r := raft.New(raft.Config{
@@ -44,11 +48,17 @@ func New(cfg Config) *Node {
 	}, rafthttp.New(cfg.PeerURLs))
 	r.SetStateMachine(fsm.New(mem))
 
+	if cfg.StoragePath != "" {
+		if err := r.SetStorage(raft.NewFileStorage(cfg.StoragePath)); err != nil {
+			return nil, err
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", server.New(r, mem, cfg.PeerURLs).Handler())
 	mux.Handle("/raft/", rafthttp.Handler(r))
 
-	return &Node{raft: r, handler: mux}
+	return &Node{raft: r, handler: mux}, nil
 }
 
 // Handler returns the node's HTTP handler.

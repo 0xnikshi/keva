@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -32,13 +33,16 @@ func startCluster(t *testing.T, ids ...string) map[string]*harness {
 			}
 		}
 		urls := map[string]string{} // filled below, shared by reference
-		n := cluster.New(cluster.Config{
+		n, err := cluster.New(cluster.Config{
 			ID:                id,
 			PeerIDs:           peerIDs,
 			PeerURLs:          urls,
 			ElectionTimeout:   60 * time.Millisecond,
 			HeartbeatInterval: 20 * time.Millisecond,
 		})
+		if err != nil {
+			t.Fatalf("cluster.New(%s): %v", id, err)
+		}
 		nodes[id] = &harness{node: n, ts: httptest.NewServer(n.Handler()), urls: urls}
 	}
 
@@ -104,6 +108,59 @@ func get(t *testing.T, base, key string) (string, int) {
 	var vr api.ValueResponse
 	_ = json.NewDecoder(resp.Body).Decode(&vr)
 	return string(vr.Value), resp.StatusCode
+}
+
+// A node persists its Raft log, so a fresh instance on the same data file
+// recovers the data — the store is rebuilt by replaying the recovered log.
+func TestNodeRecoversStateAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "n1.raft")
+	cfg := cluster.Config{
+		ID:                "n1",
+		StoragePath:       path,
+		ElectionTimeout:   30 * time.Millisecond,
+		HeartbeatInterval: 10 * time.Millisecond,
+	}
+
+	n1, err := cluster.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ts1 := httptest.NewServer(n1.Handler())
+	n1.Start()
+	waitLeaderNode(t, n1, 2*time.Second)
+	if code := put(t, ts1.URL, "k", "persisted"); code != http.StatusNoContent {
+		t.Fatalf("put = %d, want 204", code)
+	}
+	n1.Stop()
+	ts1.Close()
+
+	// Restart on the same storage path.
+	n2, err := cluster.New(cfg)
+	if err != nil {
+		t.Fatalf("restart New: %v", err)
+	}
+	ts2 := httptest.NewServer(n2.Handler())
+	defer ts2.Close()
+	n2.Start()
+	defer n2.Stop()
+	waitLeaderNode(t, n2, 2*time.Second)
+
+	got, code := get(t, ts2.URL, "k")
+	if code != http.StatusOK || got != "persisted" {
+		t.Errorf("after restart get = %q (%d), want persisted (200)", got, code)
+	}
+}
+
+func waitLeaderNode(t *testing.T, n *cluster.Node, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if n.IsLeader() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("node did not become leader")
 }
 
 func TestClusterWriteForwardAndRead(t *testing.T) {

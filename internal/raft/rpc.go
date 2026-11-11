@@ -34,10 +34,28 @@ type AppendEntriesReply struct {
 	Success bool   // true if the follower's log matched and entries were stored
 }
 
+// InstallSnapshotArgs holds the arguments for an InstallSnapshot RPC, sent by
+// the leader to a follower that has fallen behind the leader's snapshot
+// boundary: the entries the follower still needs are already compacted away,
+// so the leader ships the whole state-machine image instead of log entries.
+type InstallSnapshotArgs struct {
+	Term              uint64 // leader's term
+	LeaderID          string // so the follower can redirect clients
+	LastIncludedIndex uint64 // the snapshot replaces the log through this index
+	LastIncludedTerm  uint64 // term of the last included entry
+	Data              []byte // serialized state-machine image
+}
+
+// InstallSnapshotReply is the response to an InstallSnapshot RPC.
+type InstallSnapshotReply struct {
+	Term uint64 // responder's term, for the leader to update itself
+}
+
 // Transport sends Raft RPCs to peer nodes, addressed by peer ID. It is an
 // interface so the consensus logic can be tested over an in-memory
 // transport, with no real network involved.
 type Transport interface {
 	RequestVote(peer string, args RequestVoteArgs) (RequestVoteReply, error)
 	AppendEntries(peer string, args AppendEntriesArgs) (AppendEntriesReply, error)
+	InstallSnapshot(peer string, args InstallSnapshotArgs) (InstallSnapshotReply, error)
 }

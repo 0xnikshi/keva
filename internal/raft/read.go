@@ -43,8 +43,8 @@ func (r *Raft) confirmPeer(peer string, term uint64) bool {
 	}
 	prevIndex := r.nextIndex[peer] - 1
 	var prevTerm uint64
-	if prevIndex > 0 && prevIndex <= r.lastLogIndex() {
-		prevTerm = r.log[prevIndex-1].Term
+	if prevIndex >= r.logBase && prevIndex > 0 && prevIndex <= r.lastLogIndex() {
+		prevTerm = r.termAt(prevIndex)
 	}
 	args := AppendEntriesArgs{
 		Term:         term,

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"bytes"
+	"encoding/gob"
 	"sync"
 
 	"github.com/0xnikshi/keva/internal/keva"
@@ -54,6 +56,35 @@ func (m *Memory) Delete(key keva.Key) error {
 // Close releases resources held by the store. The in-memory store holds
 // none, so this is a no-op.
 func (m *Memory) Close() error { return nil }
+
+// Snapshot serializes the store's full contents, for use as a Raft
+// state-machine snapshot.
+func (m *Memory) Snapshot() ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(m.data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// Restore replaces the store's contents with a snapshot produced by
+// Snapshot.
+func (m *Memory) Restore(data []byte) error {
+	restored := make(map[keva.Key]keva.Value)
+	if len(data) > 0 {
+		if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&restored); err != nil {
+			return err
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data = restored
+	return nil
+}
 
 // snapshot returns a Put command for every live key, capturing current
 // state. Compaction uses it to rewrite the log to its minimal form.

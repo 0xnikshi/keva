@@ -7,13 +7,22 @@ import (
 	"github.com/0xnikshi/keva/internal/store"
 )
 
-// Store applies committed commands to an underlying key-value store.
+// KV is a key-value store that can also snapshot and restore its contents,
+// which Raft needs to compact its log.
+type KV interface {
+	store.Store
+	Snapshot() ([]byte, error)
+	Restore(data []byte) error
+}
+
+// Store applies committed commands to an underlying key-value store and
+// exposes its snapshot/restore for Raft log compaction.
 type Store struct {
-	store store.Store
+	store KV
 }
 
 // New returns a state machine backed by s.
-func New(s store.Store) *Store {
+func New(s KV) *Store {
 	return &Store{store: s}
 }
 
@@ -26,3 +35,9 @@ func (f *Store) Apply(cmd keva.Command) {
 		_ = f.store.Delete(cmd.Key)
 	}
 }
+
+// Snapshot serializes the current state.
+func (f *Store) Snapshot() ([]byte, error) { return f.store.Snapshot() }
+
+// Restore replaces the state with a snapshot.
+func (f *Store) Restore(data []byte) error { return f.store.Restore(data) }

@@ -1,5 +1,7 @@
 package raft
 
+import "github.com/0xnikshi/keva/internal/keva"
+
 // RequestVote handles an incoming RequestVote RPC and decides whether to
 // grant the candidate this node's vote.
 func (r *Raft) RequestVote(args RequestVoteArgs) RequestVoteReply {
@@ -54,6 +56,13 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	r.state = Leader
 	r.leaderID = r.id
+
+	// Append a no-op entry in the current term. Committing it advances the
+	// commit index past entries from earlier terms, so those entries are
+	// (re)applied — which is how a restarted cluster rebuilds its state.
+	r.log = append(r.log, keva.Entry{Term: r.currentTerm, Index: r.lastLogIndex() + 1})
+	r.persist()
+
 	r.nextIndex = make(map[string]uint64, len(r.peers))
 	r.matchIndex = make(map[string]uint64, len(r.peers))
 	last := r.lastLogIndex()
