@@ -57,7 +57,14 @@ func (r *Raft) SetStorage(s Storage) error {
 		r.logBaseTerm = ps.Snapshot.LastIncludedTerm
 		r.commitIndex = r.logBase
 		r.lastApplied = r.logBase
+		if ps.Snapshot.Members != nil {
+			r.snapMembers = ps.Snapshot.Members
+		}
 	}
+
+	// Rebuild the active configuration from the recovered log (and the
+	// snapshot boundary), so membership changes survive a restart.
+	r.refreshConfig()
 	return nil
 }
 

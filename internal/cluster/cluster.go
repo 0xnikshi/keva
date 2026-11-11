@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/0xnikshi/keva/internal/fsm"
+	"github.com/0xnikshi/keva/internal/keva"
 	"github.com/0xnikshi/keva/internal/raft"
 	"github.com/0xnikshi/keva/internal/rafthttp"
 	"github.com/0xnikshi/keva/internal/server"
@@ -72,3 +73,16 @@ func (n *Node) Stop() { n.raft.Stop() }
 
 // IsLeader reports whether this node is currently the leader.
 func (n *Node) IsLeader() bool { return n.raft.IsLeader() }
+
+// AddNode adds a member to the cluster. It must be called on the leader. The
+// address lets every node reach the new member once the change replicates.
+func (n *Node) AddNode(id, addr string) error {
+	_, err := n.raft.AddNode(keva.Member{ID: id, Addr: addr})
+	return err
+}
+
+// RemoveNode removes a member from the cluster. It must be called on the leader.
+func (n *Node) RemoveNode(id string) error {
+	_, err := n.raft.RemoveNode(id)
+	return err
+}

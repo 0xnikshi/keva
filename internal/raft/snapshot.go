@@ -10,6 +10,7 @@ type Snapshot struct {
 	LastIncludedIndex uint64
 	LastIncludedTerm  uint64
 	Data              []byte
+	Members           []keva.Member // cluster configuration as of the boundary
 }
 
 // Snapshot compacts the log once it has grown to at least threshold entries,
@@ -42,16 +43,31 @@ func (r *Raft) Snapshot(threshold int) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// The configuration as of the boundary is the last config entry at or
+	// before snapIndex; entries past it may carry a newer, not-yet-covered
+	// config that must not be folded in.
+	snapMembers := r.snapMembers
+	for _, e := range r.log {
+		if e.Index > snapIndex {
+			break
+		}
+		if e.Config != nil {
+			snapMembers = e.Config
+		}
+	}
+
 	// Discard the compacted prefix, keeping entries past snapIndex. The
 	// boundary term is remembered so log matching still has it.
 	tail := append([]keva.Entry(nil), r.log[snapIndex-r.logBase:]...)
 	r.log = tail
 	r.logBase = snapIndex
 	r.logBaseTerm = snapTerm
+	r.snapMembers = snapMembers
 	r.snapshot = &Snapshot{
 		LastIncludedIndex: snapIndex,
 		LastIncludedTerm:  snapTerm,
 		Data:              data,
+		Members:           snapMembers,
 	}
 	r.persist()
 	return true, nil
@@ -101,14 +117,17 @@ func (r *Raft) InstallSnapshot(args InstallSnapshotArgs) InstallSnapshotReply {
 	}
 	r.logBase = args.LastIncludedIndex
 	r.logBaseTerm = args.LastIncludedTerm
+	r.snapMembers = args.Members
 	r.snapshot = &Snapshot{
 		LastIncludedIndex: args.LastIncludedIndex,
 		LastIncludedTerm:  args.LastIncludedTerm,
 		Data:              args.Data,
+		Members:           args.Members,
 	}
 	if r.commitIndex < args.LastIncludedIndex {
 		r.commitIndex = args.LastIncludedIndex
 	}
+	r.refreshConfig() // adopt the snapshot's configuration
 	r.persist()
 	sm := r.sm
 	r.mu.Unlock()
@@ -140,6 +159,7 @@ func (r *Raft) sendSnapshot(peer string, term uint64, snap *Snapshot) {
 		LastIncludedIndex: snap.LastIncludedIndex,
 		LastIncludedTerm:  snap.LastIncludedTerm,
 		Data:              snap.Data,
+		Members:           snap.Members,
 	}
 	reply, err := r.transport.InstallSnapshot(peer, args)
 	if err != nil {

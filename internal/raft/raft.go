@@ -40,6 +40,15 @@ type Raft struct {
 	logBaseTerm uint64    // term of that entry
 	snapshot    *Snapshot // latest snapshot, nil if none taken yet
 
+	// Cluster membership. The configuration is itself part of the log: a
+	// change is a config entry, and a node adopts the latest config entry the
+	// moment it appears in the log. members is the full set (self included);
+	// peers is the derived set of others. snapMembers is the configuration as
+	// of the snapshot boundary, used as the base when the log holds no config
+	// entry of its own.
+	members     []keva.Member
+	snapMembers []keva.Member
+
 	// Volatile state, rebuilt on restart.
 	state       State
 	leaderID    string // the leader this node currently recognizes, "" if unknown
@@ -70,6 +79,12 @@ func New(cfg Config, tr Transport) *Raft {
 	if hb <= 0 {
 		hb = 50 * time.Millisecond
 	}
+	members := make([]keva.Member, 0, len(cfg.Peers)+1)
+	members = append(members, keva.Member{ID: cfg.ID})
+	for _, p := range cfg.Peers {
+		members = append(members, keva.Member{ID: p})
+	}
+
 	return &Raft{
 		id:                cfg.ID,
 		peers:             cfg.Peers,
@@ -77,6 +92,8 @@ func New(cfg Config, tr Transport) *Raft {
 		state:             Follower,
 		baseTimeout:       base,
 		heartbeatInterval: hb,
+		members:           members,
+		snapMembers:       members,
 	}
 }
 

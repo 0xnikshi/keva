@@ -39,11 +39,12 @@ type AppendEntriesReply struct {
 // boundary: the entries the follower still needs are already compacted away,
 // so the leader ships the whole state-machine image instead of log entries.
 type InstallSnapshotArgs struct {
-	Term              uint64 // leader's term
-	LeaderID          string // so the follower can redirect clients
-	LastIncludedIndex uint64 // the snapshot replaces the log through this index
-	LastIncludedTerm  uint64 // term of the last included entry
-	Data              []byte // serialized state-machine image
+	Term              uint64        // leader's term
+	LeaderID          string        // so the follower can redirect clients
+	LastIncludedIndex uint64        // the snapshot replaces the log through this index
+	LastIncludedTerm  uint64        // term of the last included entry
+	Data              []byte        // serialized state-machine image
+	Members           []keva.Member // cluster configuration as of the boundary
 }
 
 // InstallSnapshotReply is the response to an InstallSnapshot RPC.
@@ -58,4 +59,7 @@ type Transport interface {
 	RequestVote(peer string, args RequestVoteArgs) (RequestVoteReply, error)
 	AppendEntries(peer string, args AppendEntriesArgs) (AppendEntriesReply, error)
 	InstallSnapshot(peer string, args InstallSnapshotArgs) (InstallSnapshotReply, error)
+	// SetPeers registers or updates peer addresses (id → URL), so a node can
+	// reach members added after startup through a configuration change.
+	SetPeers(peers map[string]string)
 }

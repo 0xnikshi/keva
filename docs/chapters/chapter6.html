@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-6">
         <p class="eyebrow">CHAPTER 6</p>
-        <h2 class="chapter-title">Cluster Operations <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Cluster Operations <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           Make the cluster durable and elastic: recover state after a crash, compact the log so
           it does not grow forever, and change membership on a running cluster.
@@ -189,9 +189,68 @@ r.commitIndex, r.lastApplied = max them to the boundary</code></pre>
           node the same way.
         </div>
 
+        <h3 id="c6-membership">Dynamic Membership</h3>
+        <p>
+          A cluster's node set is not fixed: machines are replaced, capacity is added, a dead node
+          is swapped out. Changing membership on a <em>running</em> cluster is delicate — if the old
+          and new node sets could each form a majority on their own, two leaders could be elected at
+          once. Keva avoids that by changing membership <b>one node at a time</b>.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Dynamic membership — adding and removing nodes from a running
-          cluster without downtime or split brain.
+          <span class="k">Why one at a time is safe.</span> Add or remove a single node and any
+          majority of the old configuration and any majority of the new one must overlap in at
+          least one node — and that shared node won't vote for two leaders in the same term. Single
+          steps make the change safe without the heavier machinery of joint consensus. Only one
+          change is allowed in flight at a time, so the configurations never jump by more than one.
+        </div>
+
+        <h4>Configuration is part of the log</h4>
+        <p>
+          The membership isn't stored off to the side — it travels through the same log as the data.
+          A change is a special entry carrying the new member set, and a node adopts a configuration
+          <em>the moment the entry enters its log</em>, before it commits. That early adoption is a
+          deliberate Raft rule: the nodes deciding whether the change commits must already be
+          operating under the configuration being decided.
+        </p>
+        <pre><code>// A config change is an ordinary log entry with a member set instead of a command.
+r.log = append(r.log, keva.Entry{Term: r.currentTerm, Index: index, Config: members})
+r.applyConfig(members)  // take effect now, on append — not on commit</code></pre>
+        <p>
+          Because the configuration rides in the log, every mechanism built earlier carries it for
+          free: a follower learns a new member — and its address — from ordinary replication, a
+          catching-up node gets the configuration in its snapshot, and a restarted node rebuilds the
+          current membership by replaying its log.
+        </p>
+
+        <h4>Joining and catching up</h4>
+        <p>
+          Adding a node is proposing the change on the leader; the newcomer starts with an empty log
+          and is brought current by the same replication and snapshot machinery as any lagging
+          follower. The member entry carries the node's address, so every existing node learns how
+          to reach it as the entry replicates.
+        </p>
+        <pre><code>leader.AddNode(keva.Member{ID: "n4", Addr: "http://n4:8080"})
+// → config entry replicates → n4 catches up via AppendEntries (or a snapshot)</code></pre>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A node added to a running two-node cluster joins, adopts the
+          configuration, and catches up the committed data from an empty log; a removed node leaves
+          the membership; and a second change is refused while the first is still uncommitted.
+        </div>
+
+        <div class="callout">
+          <span class="k">Known edges.</span> Two refinements a production system adds: a removed
+          node can time out and call disruptive elections (addressed with a pre-vote phase), and
+          routing <em>client</em> requests to a brand-new node that becomes leader needs its address
+          in the request-forwarding path too. The consensus-level change — safe, replicated,
+          recoverable — is complete.
+        </div>
+
+        <div class="callout">
+          <span class="k">Chapter complete.</span> Keva now survives restarts, bounds its log with
+          snapshots, catches up far-behind nodes, and reshapes its own membership while running —
+          the operational core of a real distributed store.
         </div>
 
         <div class="page-nav">

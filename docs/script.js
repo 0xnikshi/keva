@@ -81,6 +81,7 @@ const CHAPTERS = [
       { id: "c6-persistence", label: "Persistence & Recovery" },
       { id: "c6-snapshotting", label: "Snapshotting" },
       { id: "c6-installsnapshot", label: "Catching Up a Follower" },
+      { id: "c6-membership", label: "Dynamic Membership" },
     ],
   },
 ];

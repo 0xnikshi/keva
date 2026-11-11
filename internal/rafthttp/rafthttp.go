@@ -7,23 +7,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/0xnikshi/keva/internal/raft"
 )
 
-// Transport sends Raft RPCs to peers over HTTP, addressing each by ID.
+// Transport sends Raft RPCs to peers over HTTP, addressing each by ID. The
+// base peer map is supplied at startup (and read-only thereafter); addresses
+// of members added later through a configuration change are kept separately
+// under a mutex, since those arrive while the node is running.
 type Transport struct {
-	peers  map[string]string // peer ID → base URL
+	peers map[string]string // base peer ID → URL, fixed once the node starts
+
+	mu    sync.RWMutex
+	extra map[string]string // addresses learned from configuration changes
+
 	client *http.Client
 }
 
-// New returns a Transport that reaches the given peers (id → base URL).
+// New returns a Transport that reaches the given peers (id → base URL). The
+// map may be populated by the caller up until the node starts.
 func New(peers map[string]string) *Transport {
 	return &Transport{
 		peers:  peers,
+		extra:  map[string]string{},
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
+}
+
+// SetPeers registers or updates peer addresses, so a node can reach members
+// added through a configuration change after startup.
+func (t *Transport) SetPeers(peers map[string]string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id, url := range peers {
+		t.extra[id] = url
+	}
+}
+
+func (t *Transport) peerURL(peer string) (string, bool) {
+	if url, ok := t.peers[peer]; ok {
+		return url, true
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	url, ok := t.extra[peer]
+	return url, ok
 }
 
 // RequestVote sends a RequestVote RPC to peer.
@@ -48,7 +78,7 @@ func (t *Transport) InstallSnapshot(peer string, args raft.InstallSnapshotArgs) 
 }
 
 func (t *Transport) post(peer, path string, args, reply any) error {
-	base, ok := t.peers[peer]
+	base, ok := t.peerURL(peer)
 	if !ok {
 		return fmt.Errorf("rafthttp: unknown peer %q", peer)
 	}

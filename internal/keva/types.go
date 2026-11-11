@@ -25,9 +25,18 @@ type Command struct {
 	Value Value
 }
 
-// Entry is one record in the Raft log.
+// Member identifies one node in the cluster and how to reach it.
+type Member struct {
+	ID   string
+	Addr string
+}
+
+// Entry is one record in the Raft log. A normal entry carries a Command; a
+// membership-change entry instead carries Config, the full cluster membership
+// that takes effect when the entry is added to the log.
 type Entry struct {
 	Term    uint64
 	Index   uint64
 	Command Command
+	Config  []Member // non-nil only on a membership-change entry
 }

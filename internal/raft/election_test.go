@@ -58,6 +58,9 @@ func (t *memTransport) InstallSnapshot(peer string, args InstallSnapshotArgs) (I
 	return n.InstallSnapshot(args), nil
 }
 
+// SetPeers is a no-op: the in-memory transport already holds every node by ID.
+func (t *memTransport) SetPeers(map[string]string) {}
+
 func newCluster(ids ...string) map[string]*Raft {
 	tr := &memTransport{nodes: map[string]*Raft{}, down: map[string]bool{}}
 	for _, id := range ids {

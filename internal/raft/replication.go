@@ -64,6 +64,10 @@ func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 		}
 	}
 
+	// A config entry may have arrived or been truncated; adopt the latest
+	// configuration the log now implies.
+	r.refreshConfig()
+
 	// Adopt the leader's commit index, bounded by what we now hold.
 	if args.LeaderCommit > r.commitIndex {
 		r.commitIndex = min(args.LeaderCommit, r.lastLogIndex())
