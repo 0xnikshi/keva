@@ -91,6 +91,7 @@ const CHAPTERS = [
       { id: "c7-partitions", label: "Partition Safety" },
       { id: "c7-invariants", label: "Invariant Checking" },
       { id: "c7-linearizability", label: "Linearizability Checking" },
+      { id: "c7-chaos", label: "Randomized Chaos" },
     ],
   },
 ];
