@@ -132,10 +132,63 @@
           check is independently shown to fail on corrupt state.
         </div>
 
+        <h3 id="c7-linearizability">Linearizability Checking</h3>
+        <p>
+          The invariant checker proves Raft's internals are consistent. But a client doesn't see
+          Raft — it sees an API, and what it cares about is simpler and stricter: does the store
+          behave as if every operation took effect <em>instantaneously</em>, at some single moment
+          between its request and its response? That property is <b>linearizability</b>, and it is
+          checked from the outside, against the whole stack.
+        </p>
+
+        <h4>Recording a history</h4>
+        <p>
+          Several clients hit the cluster at once over real HTTP, and every operation is recorded
+          with what it observed and the window it was in flight — a logical clock stamps each call
+          and return, giving a strict real-time order with no ties. Transient "not leader" replies
+          are retried, so each recorded operation has a single, definite effect.
+        </p>
+        <pre><code>call := tick()
+value, present := get(base, key)      // what the client actually saw
+history = append(history, op{Get, key, value, present, call, tick()})</code></pre>
+
+        <h4>The question a checker answers</h4>
+        <p>
+          A history is linearizable if the operations can each be collapsed to a single instant
+          inside their window such that the result is a valid sequential run of a key-value register
+          — and such that the order respects real time: if A returned before B was called, A comes
+          first. The search tries exactly that, one operation at a time:
+        </p>
+        <ul>
+          <li>Pick an operation that <em>no still-pending operation must precede</em> — nothing
+            finished, in real time, before it began.</li>
+          <li>Apply it to the model; if a read's observed value matches, recurse on the rest.</li>
+          <li>Backtrack when stuck. A memo of hopeless (completed-set, state) pairs keeps the search
+            from re-exploring, and the real-time rule keeps the frontier as small as the actual
+            concurrency.</li>
+        </ul>
+        <p>
+          Because distinct keys are independent registers, the check runs per key — which keeps each
+          search small even for a long run.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Linearizability checking — recording a concurrent client
-          history and verifying the whole stack, not just Raft's internals, behaves as one
-          consistent register.
+          <span class="k">A checker needs teeth.</span> The same discipline as before: the checker
+          is shown a history where a read returns an overwritten value <em>after</em> the overwrite
+          had already completed — impossible for one register — and it must reject it. Only then is
+          its acceptance of the real histories meaningful.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> Three clients driving twenty mixed operations each at the
+          cluster over real HTTP produce a history that linearizes for every key — the entire
+          system, end to end, behaves as one consistent register under concurrency.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Randomized chaos — a long run that mixes client operations
+          with partitions, crashes, restarts, and snapshots, checking both the Raft invariants and
+          linearizability throughout.
         </div>
 
         <div class="page-nav">

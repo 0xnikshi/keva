@@ -90,6 +90,7 @@ const CHAPTERS = [
     sections: [
       { id: "c7-partitions", label: "Partition Safety" },
       { id: "c7-invariants", label: "Invariant Checking" },
+      { id: "c7-linearizability", label: "Linearizability Checking" },
     ],
   },
 ];
