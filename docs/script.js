@@ -89,6 +89,7 @@ const CHAPTERS = [
     page: "chapters/chapter7.html",
     sections: [
       { id: "c7-partitions", label: "Partition Safety" },
+      { id: "c7-invariants", label: "Invariant Checking" },
     ],
   },
 ];

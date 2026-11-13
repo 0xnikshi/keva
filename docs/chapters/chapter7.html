@@ -81,10 +81,61 @@
           the two that were isolated — converges on the identical committed state.
         </div>
 
+        <h3 id="c7-invariants">Invariant Checking</h3>
+        <p>
+          A test that asserts a specific answer — "the value should be 2" — only catches the bug
+          after it has already corrupted the result. A stronger approach checks the <em>properties
+          that must always hold</em>, directly against every node's internal state, after every
+          step. If any step breaks one, it is caught the instant it happens, with the exact node
+          and index named.
+        </p>
+
+        <h4>The three properties</h4>
+        <table>
+          <thead><tr><th>Invariant</th><th>What it rules out</th></tr></thead>
+          <tbody>
+            <tr><td>Election safety</td><td>Two leaders in the same term — the root of split brain.</td></tr>
+            <tr><td>Log matching</td><td>Two entries at the same index and term that differ. Since only one leader exists per term, a given (index, term) names exactly one entry.</td></tr>
+            <tr><td>Committed agreement</td><td>A committed entry that differs between nodes. Committed is final — divergence here means a node lost an acknowledged write.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>func checkInvariants(t *testing.T, nodes map[string]*Raft) {
+    for _, check := range []func(map[string]*Raft) error{
+        electionSafety, logMatching, committedAgreement,
+    } {
+        if err := check(nodes); err != nil {
+            t.Fatal(err)
+        }
+    }
+}</code></pre>
+
+        <h4>The hardest case it must tolerate</h4>
+        <p>
+          The checker is run through the scenario that most tempts a false alarm: a partition
+          strands a leader in an old term while the majority elects a new one. <b>Two leaders exist
+          at the same moment</b> — and that is legal, because they are in different terms. The stale
+          leader even accepts a write, but it reaches only the minority and never commits; when the
+          partition heals, the real leader rolls it back. Through all of it the invariants hold:
+          election safety is per-term, and nothing committed ever diverges.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> An invariant checker — asserting Raft's safety properties
-          (at most one leader per term, the log-matching property, no conflicting applies) directly
-          across all nodes, so a violation is caught the instant it appears.
+          <span class="k">A checker needs teeth.</span> A check that never fails proves nothing, so
+          each one is fed a hand-built violation — two leaders in a term, a forked entry, a diverging
+          committed index — and must report it. Only a checker that catches those can be trusted when
+          it stays silent.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> Across elections, a partition, a stale leader's rejected
+          write, and the heal that rolls it back, all three invariants hold at every step — and each
+          check is independently shown to fail on corrupt state.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Linearizability checking — recording a concurrent client
+          history and verifying the whole stack, not just Raft's internals, behaves as one
+          consistent register.
         </div>
 
         <div class="page-nav">
