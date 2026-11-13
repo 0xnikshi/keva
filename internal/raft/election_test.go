@@ -11,11 +11,13 @@ import (
 
 // memTransport routes RPCs to peers held in memory — no network, so
 // elections are deterministic. A downed peer returns an unreachable error,
-// modeling a crashed or partitioned node.
+// modeling a crashed node; groups model a network partition, where only nodes
+// in the same group can exchange RPCs (see partition_test.go).
 type memTransport struct {
-	mu    sync.Mutex
-	nodes map[string]*Raft
-	down  map[string]bool
+	mu     sync.Mutex
+	nodes  map[string]*Raft
+	down   map[string]bool
+	groups map[string]int // node ID → partition group; empty means one network
 }
 
 func (t *memTransport) setDown(id string, d bool) {
@@ -24,18 +26,23 @@ func (t *memTransport) setDown(id string, d bool) {
 	t.down[id] = d
 }
 
-func (t *memTransport) target(peer string) (*Raft, bool) {
+// target resolves the receiver of an RPC sent by from, honoring both downed
+// nodes and network partitions.
+func (t *memTransport) target(from, peer string) (*Raft, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.down[peer] {
 		return nil, false
+	}
+	if len(t.groups) > 0 && t.groups[from] != t.groups[peer] {
+		return nil, false // partitioned: sender and receiver are on opposite sides
 	}
 	n, ok := t.nodes[peer]
 	return n, ok
 }
 
 func (t *memTransport) RequestVote(peer string, args RequestVoteArgs) (RequestVoteReply, error) {
-	n, ok := t.target(peer)
+	n, ok := t.target(args.CandidateID, peer)
 	if !ok {
 		return RequestVoteReply{}, fmt.Errorf("peer %q unreachable", peer)
 	}
@@ -43,7 +50,7 @@ func (t *memTransport) RequestVote(peer string, args RequestVoteArgs) (RequestVo
 }
 
 func (t *memTransport) AppendEntries(peer string, args AppendEntriesArgs) (AppendEntriesReply, error) {
-	n, ok := t.target(peer)
+	n, ok := t.target(args.LeaderID, peer)
 	if !ok {
 		return AppendEntriesReply{}, fmt.Errorf("peer %q unreachable", peer)
 	}
@@ -51,7 +58,7 @@ func (t *memTransport) AppendEntries(peer string, args AppendEntriesArgs) (Appen
 }
 
 func (t *memTransport) InstallSnapshot(peer string, args InstallSnapshotArgs) (InstallSnapshotReply, error) {
-	n, ok := t.target(peer)
+	n, ok := t.target(args.LeaderID, peer)
 	if !ok {
 		return InstallSnapshotReply{}, fmt.Errorf("peer %q unreachable", peer)
 	}

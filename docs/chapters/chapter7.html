@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 7 · Correctness Under Failure — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 7</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-7">
+        <p class="eyebrow">CHAPTER 7</p>
+        <h2 class="chapter-title">Correctness Under Failure <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          The previous chapters built the machinery; this one stops adding features and sets out to
+          <em>break</em> it. We inject the failures a distributed system actually meets — partitions,
+          crashes, lost messages — and assert that the guarantees still hold.
+        </p>
+
+        <h3 id="c7-partitions">Partition Safety</h3>
+        <p>
+          A network partition is the defining failure of a distributed system: some nodes can still
+          talk, but not to each other. The danger is a <b>split brain</b> — two sides each deciding
+          they are in charge and committing conflicting writes. Raft's defense is the majority rule,
+          and the first thing to verify is that the rule actually holds when the network splits.
+        </p>
+
+        <h4>Modeling a partition</h4>
+        <p>
+          The in-memory transport already knew how to drop a crashed node. A partition is richer: it
+          is about <em>pairs</em> of nodes, not single ones. Each RPC already carries its sender (a
+          vote carries the candidate, an append carries the leader), so the transport can place
+          every node in a group and deliver a message only when sender and receiver share one.
+        </p>
+        <pre><code>func (t *memTransport) target(from, peer string) (*Raft, bool) {
+    if t.down[peer] {
+        return nil, false
+    }
+    if len(t.groups) &gt; 0 &amp;&amp; t.groups[from] != t.groups[peer] {
+        return nil, false // partitioned: opposite sides cannot exchange RPCs
+    }
+    return t.nodes[peer], true
+}</code></pre>
+
+        <h4>What must stay true</h4>
+        <p>
+          Split a five-node cluster into a majority of three and a minority of two. Two properties
+          have to hold, and they are the heart of Raft's safety:
+        </p>
+        <ul>
+          <li><b>The minority cannot make progress.</b> With only two of five nodes reachable it can
+            neither elect a leader nor commit a write — a commit needs a majority, and a majority is
+            exactly what the minority lacks.</li>
+          <li><b>The majority keeps serving.</b> Three of five is still a majority, so the leader on
+            that side commits writes as usual, unaffected by the nodes it cannot reach.</li>
+        </ul>
+        <p>
+          Because any two majorities of the same cluster must overlap, the isolated side can never
+          commit something the serving side doesn't know about. There is no second leader with
+          authority, so there is nothing to reconcile.
+        </p>
+
+        <h4>Healing without divergence</h4>
+        <p>
+          When the partition lifts, the nodes that were cut off are simply followers behind the log.
+          The same replication that catches up any lagging follower brings them current — they adopt
+          exactly the writes the majority committed, in the same order. The cluster converges on one
+          history; the partition leaves no trace.
+        </p>
+
+        <div class="callout">
+          <span class="k">Proven.</span> Under a 3–2 split the majority commits new writes while the
+          minority can neither elect a leader nor see them; after the heal, every node — including
+          the two that were isolated — converges on the identical committed state.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> An invariant checker — asserting Raft's safety properties
+          (at most one leader per term, the log-matching property, no conflicting applies) directly
+          across all nodes, so a violation is caught the instant it appears.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter6.html"><span class="nav-dir">← Previous</span>Ch. 6 — Cluster Operations</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>

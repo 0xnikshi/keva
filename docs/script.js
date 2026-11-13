@@ -84,6 +84,13 @@ const CHAPTERS = [
       { id: "c6-membership", label: "Dynamic Membership" },
     ],
   },
+  {
+    label: "Ch. 7 — Correctness Under Failure",
+    page: "chapters/chapter7.html",
+    sections: [
+      { id: "c7-partitions", label: "Partition Safety" },
+    ],
+  },
 ];
 
 const CHEVRON =
