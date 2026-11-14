@@ -1,15 +1,76 @@
 package raft
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// readConfirmTimeout bounds one batched read-index confirmation round, so the
+// batch processor never blocks indefinitely on a cluster that cannot commit.
+const readConfirmTimeout = 5 * time.Second
+
+type readResult struct {
+	idx uint64
+	err error
+}
 
 // ReadIndex returns a commit index such that, once the state machine has
 // applied up to it, a read reflects every write committed before the call — a
-// linearizable read. It first waits for the read barrier (a current-term entry
-// must commit, so this node's commit index no longer lags a previous leader's
-// writes), then confirms it is still the leader by heartbeating a majority,
-// then applies up to the captured index. It returns ErrNotLeader if this node
-// is not, or is no longer, the leader, or ctx's error if the wait is cut short.
+// linearizable read. Concurrent callers are coalesced: they queue and share a
+// single leadership-confirmation round rather than each heartbeating a
+// majority, so read throughput is not bounded by one round per read. It
+// returns ErrNotLeader if this node is not the leader, or ctx's error if the
+// caller gives up first.
 func (r *Raft) ReadIndex(ctx context.Context) (uint64, error) {
+	res := make(chan readResult, 1)
+
+	r.readMu.Lock()
+	r.readQueue = append(r.readQueue, res)
+	if !r.readProcessing {
+		r.readProcessing = true
+		go r.processReads()
+	}
+	r.readMu.Unlock()
+
+	select {
+	case rr := <-res:
+		return rr.idx, rr.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+// processReads serves queued reads in batches. Each pass takes every request
+// waiting, confirms the read index once, and delivers that result to all of
+// them — so a burst of concurrent reads costs one confirmation round, not one
+// per read. A request that arrives mid-round joins the next batch, so it is
+// always served by a round whose index reflects its own arrival.
+func (r *Raft) processReads() {
+	for {
+		r.readMu.Lock()
+		batch := r.readQueue
+		r.readQueue = nil
+		if len(batch) == 0 {
+			r.readProcessing = false
+			r.readMu.Unlock()
+			return
+		}
+		r.readMu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), readConfirmTimeout)
+		idx, err := r.confirmReadIndex(ctx)
+		cancel()
+
+		for _, res := range batch {
+			res <- readResult{idx: idx, err: err}
+		}
+	}
+}
+
+// confirmReadIndex performs one read-index confirmation: wait for the read
+// barrier, capture the commit index, confirm leadership with a majority, and
+// apply up to that index. See ReadIndex for the linearizability rationale.
+func (r *Raft) confirmReadIndex(ctx context.Context) (uint64, error) {
 	// Raft §6.4: a newly elected leader's commit index can trail the true
 	// commit point until it commits an entry from its own term. Serving a read
 	// before then risks missing an already-acknowledged write.

@@ -105,6 +105,13 @@ const CHAPTERS = [
       { id: "c8-lifecycle", label: "Graceful Lifecycle" },
     ],
   },
+  {
+    label: "Ch. 9 — Performance",
+    page: "chapters/chapter9.html",
+    sections: [
+      { id: "c9-read-batching", label: "Batched Reads" },
+    ],
+  },
 ];
 
 const CHEVRON =

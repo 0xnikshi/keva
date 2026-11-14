@@ -82,6 +82,12 @@ type Raft struct {
 	// leadership changes, so a caller can block until its entry commits (see
 	// AwaitCommit) without polling.
 	commitWait chan struct{}
+
+	// Read batching: concurrent linearizable reads queue here and share a
+	// single leadership-confirmation round instead of each doing its own.
+	readMu         sync.Mutex
+	readQueue      []chan readResult
+	readProcessing bool
 }
 
 // New creates a node in the follower state at term 0 with an empty log,

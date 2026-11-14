@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,9 @@ type memTransport struct {
 	nodes  map[string]*Raft
 	down   map[string]bool
 	groups map[string]int // node ID → partition group; empty means one network
+
+	appendCalls atomic.Int64  // counts AppendEntries RPCs, for batching tests
+	appendDelay time.Duration // optional per-call delay, set before use in tests
 }
 
 func (t *memTransport) setDown(id string, d bool) {
@@ -50,6 +54,10 @@ func (t *memTransport) RequestVote(peer string, args RequestVoteArgs) (RequestVo
 }
 
 func (t *memTransport) AppendEntries(peer string, args AppendEntriesArgs) (AppendEntriesReply, error) {
+	t.appendCalls.Add(1)
+	if t.appendDelay > 0 {
+		time.Sleep(t.appendDelay)
+	}
 	n, ok := t.target(args.LeaderID, peer)
 	if !ok {
 		return AppendEntriesReply{}, fmt.Errorf("peer %q unreachable", peer)

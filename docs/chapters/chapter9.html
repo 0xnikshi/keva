@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 9 · Performance — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 9</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-9">
+        <p class="eyebrow">CHAPTER 9</p>
+        <h2 class="chapter-title">Performance <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          Correct and hardened, Keva is now made fast. The theme is <em>amortization</em>: the
+          costly steps of consensus — a round trip to a majority, an fsync — should be paid once for
+          many operations, not once per operation.
+        </p>
+
+        <h3 id="c9-read-batching">Batched Reads</h3>
+        <p>
+          A linearizable read is not free: before the leader may answer, it must confirm it is still
+          the leader by hearing back from a majority (the ReadIndex round from Chapter 5). Done
+          naively, every read pays its own round trip, so read throughput is capped at one majority
+          confirmation per read — wasteful when many reads arrive at once, since a single
+          confirmation would have vouched for all of them.
+        </p>
+
+        <h4>Coalescing the confirmation</h4>
+        <p>
+          Reads now queue and share rounds. Each request registers itself and the first one starts a
+          processor; the processor takes everything waiting, performs <b>one</b> confirmation round,
+          and hands that result to the whole batch. Requests that arrive while a round is in flight
+          form the next batch — so a read is always served by a round that began at or after its own
+          arrival, which keeps it linearizable.
+        </p>
+        <pre><code>func (r *Raft) processReads() {
+    for {
+        batch := r.takeQueuedReads()   // everything waiting right now
+        if len(batch) == 0 { return }
+        idx, err := r.confirmReadIndex(ctx)  // ONE majority round
+        for _, res := range batch {
+            res &lt;- readResult{idx, err}      // serve them all
+        }
+    }
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Why it stays linearizable.</span> The read index for a batch is captured
+          after the batch is closed, so it is at least as recent as every request in it — each read
+          still reflects everything committed before it began. A request that shows up mid-round is
+          deferred to the next batch rather than served by a stale one.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> With a brief delay holding each round open, twenty
+          concurrent reads complete using just two confirmation rounds instead of twenty — the cost
+          of confirmation is now shared across the batch, not paid per read.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Batching the write path — coalescing concurrent proposals
+          into one replication round and one fsync — and benchmarks to put numbers on all of it.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter8.html"><span class="nav-dir">← Previous</span>Ch. 8 — Hardening</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>
