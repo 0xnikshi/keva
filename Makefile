@@ -2,7 +2,7 @@ BIN_DIR := bin
 PKGS    := ./...
 GO      := go
 
-.PHONY: all build build-daemon build-cli build-load demo monitor monitor-down test test-race cover vet fmt fmt-check lint tidy clean help
+.PHONY: all build build-daemon build-cli build-load demo monitor monitor-down monitor-deps monitor-fetch monitor-local test test-race cover vet fmt fmt-check lint tidy clean help
 
 all: build
 
@@ -29,6 +29,18 @@ monitor:
 ## monitor-down: stop the stack and remove its volumes
 monitor-down:
 	docker compose down -v
+
+## monitor-fetch: download official Prometheus & Grafana binaries into ./tools
+monitor-fetch:
+	@./scripts/fetch-tools.sh
+
+## monitor-deps: install Prometheus and Grafana via Homebrew (alternative to fetch)
+monitor-deps:
+	brew install prometheus grafana
+
+## monitor-local: run the full stack natively, no Docker (Ctrl-C to stop)
+monitor-local: build
+	@./scripts/monitor-local.sh
 
 ## test: run the test suite
 test:

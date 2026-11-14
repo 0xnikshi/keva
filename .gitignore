@@ -42,3 +42,4 @@ go.work.sum
 # Local data files
 *.wal
 *.wal.compact
+tools/

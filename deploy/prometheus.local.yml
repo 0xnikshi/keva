@@ -1,0 +1,14 @@
+# Scrape config for the native (no-Docker) stack: nodes and the load generator
+# run as local processes, so targets are localhost ports.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: keva
+    static_configs:
+      - targets: ["localhost:7070", "localhost:7071", "localhost:7072"]
+
+  - job_name: kevaload
+    static_configs:
+      - targets: ["localhost:9100"]
