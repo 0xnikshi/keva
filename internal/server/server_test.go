@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -35,23 +36,47 @@ func (p directProposer) Submit(cmd keva.Command) (uint64, error) {
 	}
 	return 1, nil
 }
-func (directProposer) ReadIndex() (uint64, error) { return 1, nil }
-func (directProposer) Leader() string             { return "n1" }
-func (directProposer) IsLeader() bool             { return true }
+func (directProposer) AwaitCommit(context.Context, uint64) error { return nil }
+func (directProposer) ReadIndex() (uint64, error)                { return 1, nil }
+func (directProposer) Leader() string                            { return "n1" }
+func (directProposer) IsLeader() bool                            { return true }
 
 // notLeaderProposer always reports that this node is a follower with no
 // known leader.
 type notLeaderProposer struct{}
 
-func (notLeaderProposer) Submit(keva.Command) (uint64, error) { return 0, raft.ErrNotLeader }
-func (notLeaderProposer) ReadIndex() (uint64, error)          { return 0, raft.ErrNotLeader }
-func (notLeaderProposer) Leader() string                      { return "" }
-func (notLeaderProposer) IsLeader() bool                      { return false }
+func (notLeaderProposer) Submit(keva.Command) (uint64, error)       { return 0, raft.ErrNotLeader }
+func (notLeaderProposer) AwaitCommit(context.Context, uint64) error { return raft.ErrNotLeader }
+func (notLeaderProposer) ReadIndex() (uint64, error)                { return 0, raft.ErrNotLeader }
+func (notLeaderProposer) Leader() string                            { return "" }
+func (notLeaderProposer) IsLeader() bool                            { return false }
 
 func newTestServer() http.Handler {
 	mem := store.NewMemory()
 	return New(directProposer{mem}, mem, nil).Handler()
 }
+
+// blockingProposer parks every write in AwaitCommit until release is closed,
+// signalling on entered each time, so a test can hold request slots open and
+// exercise the in-flight limiter.
+type blockingProposer struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (blockingProposer) Submit(keva.Command) (uint64, error) { return 1, nil }
+func (p blockingProposer) AwaitCommit(ctx context.Context, _ uint64) error {
+	p.entered <- struct{}{}
+	select {
+	case <-p.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (blockingProposer) ReadIndex() (uint64, error) { return 1, nil }
+func (blockingProposer) Leader() string             { return "n1" }
+func (blockingProposer) IsLeader() bool             { return true }
 
 func do(t *testing.T, h http.Handler, method, target string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
@@ -174,5 +199,43 @@ func TestWriteGoesThroughRaft(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if !bytes.Equal(resp.Value, []byte("hello")) {
 		t.Errorf("value = %q, want hello", resp.Value)
+	}
+}
+
+func TestBackpressureShedsExcessLoad(t *testing.T) {
+	mem := store.NewMemory()
+	bp := blockingProposer{entered: make(chan struct{}), release: make(chan struct{})}
+	ts := httptest.NewServer(NewWithLimit(bp, mem, nil, 1).Handler())
+	defer ts.Close()
+
+	put := func(key string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/v1/kv/"+key, bytes.NewReader([]byte("{}")))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("PUT %s: %v", key, err)
+			return 0, ""
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode, resp.Header.Get("Retry-After")
+	}
+
+	// Request A claims the only slot and parks in AwaitCommit.
+	aCode := make(chan int, 1)
+	go func() { code, _ := put("a"); aCode <- code }()
+	<-bp.entered
+
+	// Request B arrives with the node full and is shed at once.
+	code, retryAfter := put("b")
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("overflow request status = %d, want 503", code)
+	}
+	if retryAfter == "" {
+		t.Error("overload response missing Retry-After header")
+	}
+
+	// Releasing A lets it finish normally, freeing the slot.
+	close(bp.release)
+	if got := <-aCode; got != http.StatusNoContent {
+		t.Errorf("released request status = %d, want 204", got)
 	}
 }

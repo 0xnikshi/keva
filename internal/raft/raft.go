@@ -66,6 +66,11 @@ type Raft struct {
 	lastContact       time.Time
 	running           bool
 	stopCh            chan struct{}
+
+	// commitWait is closed and replaced whenever the commit index advances or
+	// leadership changes, so a caller can block until its entry commits (see
+	// AwaitCommit) without polling.
+	commitWait chan struct{}
 }
 
 // New creates a node in the follower state at term 0 with an empty log,
@@ -94,7 +99,15 @@ func New(cfg Config, tr Transport) *Raft {
 		heartbeatInterval: hb,
 		members:           members,
 		snapMembers:       members,
+		commitWait:        make(chan struct{}),
 	}
+}
+
+// notifyCommitWaiters wakes everything blocked in AwaitCommit, because either
+// the commit index advanced or leadership changed. The caller holds r.mu.
+func (r *Raft) notifyCommitWaiters() {
+	close(r.commitWait)
+	r.commitWait = make(chan struct{})
 }
 
 // State returns the node's current role.
@@ -152,6 +165,7 @@ func (r *Raft) becomeFollower(term uint64) {
 	r.votedFor = ""
 	r.leaderID = "" // leader unknown until the next heartbeat
 	r.persist()
+	r.notifyCommitWaiters() // wake writers waiting on commit; they must re-check
 }
 
 // Leader returns the ID of the leader this node currently recognizes, or

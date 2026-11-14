@@ -94,6 +94,14 @@ const CHAPTERS = [
       { id: "c7-chaos", label: "Randomized Chaos" },
     ],
   },
+  {
+    label: "Ch. 8 — Hardening",
+    page: "chapters/chapter8.html",
+    sections: [
+      { id: "c8-durable-ack", label: "Durable Acknowledgment" },
+      { id: "c8-backpressure", label: "Request Limits & Backpressure" },
+    ],
+  },
 ];
 
 const CHEVRON =

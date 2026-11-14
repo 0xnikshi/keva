@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,10 +22,15 @@ const maxBodySize = 1 << 20 // 1 MiB
 // Submit fails when this node is not the leader.
 type Proposer interface {
 	Submit(cmd keva.Command) (uint64, error)
-	ReadIndex() (uint64, error) // confirm leadership for a linearizable read
-	Leader() string             // ID of the current leader, "" if unknown
+	AwaitCommit(ctx context.Context, index uint64) error // block until the entry commits
+	ReadIndex() (uint64, error)                          // confirm leadership for a linearizable read
+	Leader() string                                      // ID of the current leader, "" if unknown
 	IsLeader() bool
 }
+
+// commitTimeout bounds how long a write waits for its entry to commit before
+// the client gets a timeout, so a stalled cluster never hangs a request.
+const commitTimeout = 5 * time.Second
 
 // Server serves the Keva HTTP API. Writes are proposed through Raft (and
 // forwarded to the leader when this node is a follower); reads are served
@@ -34,27 +40,57 @@ type Server struct {
 	store  store.Store
 	peers  map[string]string // peer ID → base URL, for forwarding to the leader
 	client *http.Client
+	sem    chan struct{} // bounds in-flight client requests (backpressure)
 }
+
+// maxInflight caps concurrent client requests a node will serve at once.
+// Beyond it, load is shed rather than queued, so an overloaded or stalled
+// node stays responsive instead of exhausting goroutines and memory.
+const maxInflight = 256
 
 // New returns a Server that proposes writes through p, reads from s, and
 // forwards writes to the leader using the peers map (id → base URL).
 func New(p Proposer, s store.Store, peers map[string]string) *Server {
+	return NewWithLimit(p, s, peers, maxInflight)
+}
+
+// NewWithLimit is New with an explicit in-flight request cap, mainly so tests
+// can exercise the backpressure path with a small limit.
+func NewWithLimit(p Proposer, s store.Store, peers map[string]string, inflight int) *Server {
 	return &Server{
 		raft:   p,
 		store:  s,
 		peers:  peers,
 		client: &http.Client{Timeout: 5 * time.Second},
+		sem:    make(chan struct{}, inflight),
 	}
 }
 
-// Handler builds the HTTP routes and returns the root handler, wrapped in
-// the request-logging middleware.
+// Handler builds the HTTP routes and returns the root handler, wrapped in the
+// in-flight limiter and request-logging middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/kv/{key}", s.handleGet)
 	mux.HandleFunc("PUT /v1/kv/{key}", s.handlePut)
 	mux.HandleFunc("DELETE /v1/kv/{key}", s.handleDelete)
-	return logging(mux)
+	return logging(s.limit(mux))
+}
+
+// limit sheds load once maxInflight requests are already in flight: it tries
+// to claim a slot without waiting and, failing that, returns 503 immediately
+// rather than letting work queue up without bound. Raft's own peer RPCs run on
+// a separate handler and are never gated here, so consensus is not starved.
+func (s *Server) limit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case s.sem <- struct{}{}:
+			defer func() { <-s.sem }()
+			next.ServeHTTP(w, r)
+		default:
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "server overloaded")
+		}
+	})
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +140,12 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.raft.Submit(keva.Command{Op: keva.OpPut, Key: key, Value: req.Value}); err != nil {
+	index, err := s.raft.Submit(keva.Command{Op: keva.OpPut, Key: key, Value: req.Value})
+	if err != nil {
+		s.writeSubmitError(w, err)
+		return
+	}
+	if err := s.awaitCommit(r, index); err != nil {
 		s.writeSubmitError(w, err)
 		return
 	}
@@ -119,11 +160,25 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	key := keva.Key(r.PathValue("key"))
 
-	if _, err := s.raft.Submit(keva.Command{Op: keva.OpDelete, Key: key}); err != nil {
+	index, err := s.raft.Submit(keva.Command{Op: keva.OpDelete, Key: key})
+	if err != nil {
+		s.writeSubmitError(w, err)
+		return
+	}
+	if err := s.awaitCommit(r, index); err != nil {
 		s.writeSubmitError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// awaitCommit blocks until the proposed entry commits, bounded by both the
+// client's request lifetime and commitTimeout — so a success response means
+// the write is durably replicated, not merely proposed.
+func (s *Server) awaitCommit(r *http.Request, index uint64) error {
+	ctx, cancel := context.WithTimeout(r.Context(), commitTimeout)
+	defer cancel()
+	return s.raft.AwaitCommit(ctx, index)
 }
 
 // forwardToLeader proxies a write to the current leader and relays its
@@ -160,14 +215,21 @@ func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// writeSubmitError maps a Raft submission failure to an HTTP status. A
-// non-leader is retryable, so it returns 503; anything else is a 500.
+// writeSubmitError maps a Raft submission or commit-wait failure to an HTTP
+// status. Leadership loss and client cancellation are retryable (503); a
+// commit that did not land in time is a gateway timeout (504); anything else
+// is a 500.
 func (s *Server) writeSubmitError(w http.ResponseWriter, err error) {
-	if errors.Is(err, raft.ErrNotLeader) {
+	switch {
+	case errors.Is(err, raft.ErrNotLeader):
 		writeError(w, http.StatusServiceUnavailable, "not the leader")
-		return
+	case errors.Is(err, context.DeadlineExceeded):
+		writeError(w, http.StatusGatewayTimeout, "write did not commit in time")
+	case errors.Is(err, context.Canceled):
+		writeError(w, http.StatusServiceUnavailable, "request canceled")
+	default:
+		writeError(w, http.StatusInternalServerError, "internal error")
 	}
-	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

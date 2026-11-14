@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 8 · Hardening — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 8</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-8">
+        <p class="eyebrow">CHAPTER 8</p>
+        <h2 class="chapter-title">Hardening <span class="pill wip">IN PROGRESS</span></h2>
+        <p class="lead">
+          Keva is correct; this chapter makes it <em>robust</em> — turning a system that works into
+          one that behaves well when clients misbehave, the cluster stalls, or an operator needs to
+          see what it is doing.
+        </p>
+
+        <h3 id="c8-durable-ack">Durable Acknowledgment</h3>
+        <p>
+          A write handler used to return <code>204 No Content</code> as soon as the command was
+          <em>proposed</em> to Raft — appended to the leader's log and sent to peers — not once it
+          had <em>committed</em>. That is a subtle but real lie: a proposed entry can still be lost
+          if the leader is deposed before a majority stores it. A client that got a success could
+          later find its write gone.
+        </p>
+
+        <div class="callout">
+          <span class="k">Why it slipped through.</span> On a healthy, in-process cluster a
+          single replication round almost always commits before the call returns, so the gap was
+          invisible — until concurrency on CI produced a history the linearizability checker
+          rejected. The fix is to make the acknowledgment mean what clients assume it means.
+        </div>
+
+        <h4>Waiting for commit, without polling</h4>
+        <p>
+          Submitting stays non-blocking at the Raft layer — it proposes and returns the entry's
+          index. The new piece is <code>AwaitCommit</code>, which blocks until that index commits,
+          leadership is lost, or the caller's context is done. It waits on a channel that is closed
+          whenever the commit index advances or the node steps down, so there is no polling.
+        </p>
+        <pre><code>func (r *Raft) AwaitCommit(ctx context.Context, index uint64) error {
+    for {
+        r.mu.Lock()
+        switch {
+        case r.state != Leader:        r.mu.Unlock(); return ErrNotLeader
+        case r.commitIndex >= index:   r.mu.Unlock(); return nil
+        }
+        wait := r.commitWait
+        r.mu.Unlock()
+
+        select {
+        case &lt;-ctx.Done(): return ctx.Err()
+        case &lt;-wait:        // commit advanced or leadership changed; re-check
+        }
+    }
+}</code></pre>
+
+        <h4>A deadline on every write</h4>
+        <p>
+          The server proposes, then awaits commit under a context bounded by both the client's
+          request lifetime and a server timeout. The outcome maps to a precise status: committed is
+          <code>204</code>; a lost leadership or canceled request is a retryable
+          <code>503</code>; a commit that did not land in time is <code>504 Gateway Timeout</code>.
+          A stalled cluster can no longer hang a connection indefinitely.
+        </p>
+        <pre><code>index, err := s.raft.Submit(cmd)      // propose
+// ...
+ctx, cancel := context.WithTimeout(r.Context(), commitTimeout)
+defer cancel()
+if err := s.raft.AwaitCommit(ctx, index); err != nil {
+    s.writeSubmitError(w, err)        // 503 / 504
+    return
+}
+w.WriteHeader(http.StatusNoContent)   // now the write is durable</code></pre>
+
+        <div class="callout">
+          <span class="k">Proven.</span> Awaiting a committed entry returns at once; an isolated
+          leader's write times out at its deadline rather than hanging; and a write in flight when
+          the leader steps down fails with a clear, retryable error instead of a false success.
+        </div>
+
+        <h3 id="c8-backpressure">Request Limits &amp; Backpressure</h3>
+        <p>
+          Every write now blocks until it commits, so a slow or stalled cluster leaves requests
+          parked — each holding a goroutine, a connection, and memory. Without a limit, a burst of
+          load or a wedged cluster piles work up without bound until the node falls over, taking
+          even recoverable requests down with it. The defense is <b>backpressure</b>: cap the work
+          in flight and shed the rest cleanly.
+        </p>
+
+        <h4>Shedding, not queuing</h4>
+        <p>
+          A counting semaphore — a buffered channel of fixed size — gates the client API. A request
+          tries to claim a slot <em>without waiting</em>; if none is free, it gets
+          <code>503 Service Unavailable</code> with a <code>Retry-After</code> hint immediately,
+          rather than joining an unbounded queue. Shedding keeps the node responsive and pushes the
+          decision to retry back to the client, where it belongs.
+        </p>
+        <pre><code>func (s *Server) limit(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        select {
+        case s.sem &lt;- struct{}{}:        // claimed a slot
+            defer func() { &lt;-s.sem }()
+            next.ServeHTTP(w, r)
+        default:                         // full: shed the load
+            w.Header().Set("Retry-After", "1")
+            writeError(w, http.StatusServiceUnavailable, "server overloaded")
+        }
+    })
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Consensus is never starved.</span> The limiter wraps only the client API
+          (<code>/v1</code>). Raft's own peer RPCs (<code>/raft</code>) run on a separate handler
+          and are never gated — so even while the node sheds client load, heartbeats, replication,
+          and elections keep flowing, which is exactly what a stalled cluster needs to recover.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> With the limit set to one, a request that parks in the
+          commit wait holds the only slot; the next request is shed with <code>503</code> and a
+          <code>Retry-After</code> header rather than blocking; and once the first completes, the
+          slot frees and traffic flows again.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Observability — exposing the node's Raft state and request
+          metrics so an operator can see what the cluster is doing.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter7.html"><span class="nav-dir">← Previous</span>Ch. 7 — Correctness Under Failure</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>

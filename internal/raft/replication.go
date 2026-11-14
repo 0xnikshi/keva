@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"errors"
 
 	"github.com/0xnikshi/keva/internal/keva"
@@ -98,6 +99,34 @@ func (r *Raft) Submit(cmd keva.Command) (uint64, error) {
 
 	r.replicate()
 	return index, nil
+}
+
+// AwaitCommit blocks until the entry at index is committed, returning nil, or
+// until ctx is done, or until this node stops being the leader for the term
+// that proposed the entry — in which case the entry may never commit, so the
+// caller must treat it as failed. It lets a server turn Submit's propose-only
+// semantics into a durable acknowledgement without polling.
+func (r *Raft) AwaitCommit(ctx context.Context, index uint64) error {
+	for {
+		r.mu.Lock()
+		switch {
+		case r.state != Leader:
+			r.mu.Unlock()
+			return ErrNotLeader
+		case r.commitIndex >= index:
+			r.mu.Unlock()
+			return nil
+		}
+		wait := r.commitWait
+		r.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+			// Commit advanced or leadership changed; loop and re-check.
+		}
+	}
 }
 
 // replicate pushes outstanding entries to every peer, then advances the
@@ -203,6 +232,7 @@ func (r *Raft) advanceCommit() {
 		}
 		if count >= majority {
 			r.commitIndex = n
+			r.notifyCommitWaiters()
 			return
 		}
 	}
