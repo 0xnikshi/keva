@@ -72,6 +72,12 @@ func (r *Raft) SetStorage(s Storage) error {
 // holds r.mu. A real deployment must treat a persist failure as fatal —
 // acting on unsaved state is unsafe; we keep it best-effort here.
 func (r *Raft) persist() {
+	// Mark everything in the log as persisted through to here. The commit
+	// index is not allowed past this point, so a committed entry is always
+	// one the fsync below has covered. With no durable storage the fsync is a
+	// no-op, but the mark still gates commit as if every entry were persisted.
+	r.persistedIndex = r.lastLogIndex()
+
 	if r.storage == nil {
 		return
 	}

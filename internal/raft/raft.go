@@ -88,6 +88,18 @@ type Raft struct {
 	readMu         sync.Mutex
 	readQueue      []chan readResult
 	readProcessing bool
+
+	// persistedIndex is the highest log index durably written by persist. The
+	// commit index never advances past it, so a committed entry is always one
+	// that has been persisted — group commit must not acknowledge a write the
+	// fsync has not yet covered.
+	persistedIndex uint64
+
+	// Write batching: concurrent proposals queue here and share one persist
+	// and one replication round instead of each doing its own.
+	flushMu      sync.Mutex
+	flushWaiters []chan struct{}
+	flushing     bool
 }
 
 // New creates a node in the follower state at term 0 with an empty log,

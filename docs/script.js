@@ -110,6 +110,7 @@ const CHAPTERS = [
     page: "chapters/chapter9.html",
     sections: [
       { id: "c9-read-batching", label: "Batched Reads" },
+      { id: "c9-group-commit", label: "Group Commit" },
     ],
   },
 ];

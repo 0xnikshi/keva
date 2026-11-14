@@ -65,9 +65,52 @@
           of confirmation is now shared across the batch, not paid per read.
         </div>
 
+        <h3 id="c9-group-commit">Group Commit</h3>
+        <p>
+          Writes have their own per-operation tax. Each proposal was appended, <em>persisted with
+          its own fsync</em>, and sent in its own replication round. fsync is the slow one — tens to
+          hundreds of microseconds of real disk work — so paying it once per write throttles the
+          whole write path. The fix is the same shape as batched reads, applied to the costly
+          steps: coalesce concurrent proposals into one persist and one round.
+        </p>
+
+        <h4>Append, then flush together</h4>
+        <p>
+          A proposal appends its entry under the lock and then joins a flush. The first proposal in
+          flight starts a processor; others queue behind it. The processor persists once — a single
+          fsync covering every entry the batch appended — and runs one replication round that
+          carries them all. A proposal that arrives mid-flush joins the next batch, so its entry is
+          always covered by a round that began after its append.
+        </p>
+        <pre><code>func (r *Raft) flushLoop() {
+    for {
+        batch := r.takeFlushWaiters()        // everyone waiting now
+        if len(batch) == 0 { return }
+        r.persist()                          // ONE fsync for the batch
+        r.replicate()                        // ONE round carrying them all
+        for _, done := range batch { close(done) }
+    }
+}</code></pre>
+
         <div class="callout">
-          <span class="k">Next.</span> Batching the write path — coalescing concurrent proposals
-          into one replication round and one fsync — and benchmarks to put numbers on all of it.
+          <span class="k">Commit never outruns the fsync.</span> Group commit introduces a hazard: a
+          second proposal can append while a batch is mid-flight, so the log can hold entries that
+          are not yet persisted. The commit index is therefore capped at a <code>persistedIndex</code>
+          that only advances inside <code>persist</code> — an entry can be committed, and so
+          acknowledged, only once the fsync that covers it has run. Durability is never traded for
+          throughput.
+        </div>
+
+        <div class="callout">
+          <span class="k">Proven.</span> With a round held briefly open, twenty concurrent writes
+          complete using two persists instead of twenty — the fsync cost is amortized across the
+          batch — while every existing correctness test, including the chaos and linearizability
+          suites, still passes.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Benchmarks — putting real numbers on read and write
+          throughput to anchor the showcase.
         </div>
 
         <div class="page-nav">

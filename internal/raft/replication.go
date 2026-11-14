@@ -84,8 +84,12 @@ func (r *Raft) AppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 	return reply
 }
 
-// Submit appends a command to the leader's log and replicates it, returning
-// the log index it was stored at. It fails if this node is not the leader.
+// Submit appends a command to the leader's log and gets it persisted and
+// replicated, returning the log index it was stored at. It fails if this node
+// is not the leader. Submit is propose-only: it returns once the entry has
+// been through a persist-and-replicate round, not once it has committed —
+// callers that need durability wait on AwaitCommit. Concurrent Submits share a
+// single persist and replication round (see flush).
 func (r *Raft) Submit(cmd keva.Command) (uint64, error) {
 	r.mu.Lock()
 	if r.state != Leader {
@@ -94,11 +98,49 @@ func (r *Raft) Submit(cmd keva.Command) (uint64, error) {
 	}
 	index := r.lastLogIndex() + 1
 	r.log = append(r.log, keva.Entry{Term: r.currentTerm, Index: index, Command: cmd})
-	r.persist()
 	r.mu.Unlock()
 
-	r.replicate()
+	r.flush()
 	return index, nil
+}
+
+// flush persists the log and runs one replication round, coalescing concurrent
+// callers: the first starts a processor, the rest queue, and one persist +
+// round serves the whole batch. A caller is always served by a round that
+// began after its own append, so its entry is included.
+func (r *Raft) flush() {
+	done := make(chan struct{})
+	r.flushMu.Lock()
+	r.flushWaiters = append(r.flushWaiters, done)
+	if !r.flushing {
+		r.flushing = true
+		go r.flushLoop()
+	}
+	r.flushMu.Unlock()
+	<-done
+}
+
+func (r *Raft) flushLoop() {
+	for {
+		r.flushMu.Lock()
+		batch := r.flushWaiters
+		r.flushWaiters = nil
+		if len(batch) == 0 {
+			r.flushing = false
+			r.flushMu.Unlock()
+			return
+		}
+		r.flushMu.Unlock()
+
+		r.mu.Lock()
+		r.persist() // one fsync covering every entry appended by the batch
+		r.mu.Unlock()
+		r.replicate() // one round carrying them all
+
+		for _, done := range batch {
+			close(done)
+		}
+	}
 }
 
 // AwaitCommit blocks until the entry at index is committed, returning nil, or
@@ -218,7 +260,9 @@ func (r *Raft) replicateTo(peer string, term uint64) {
 // term that a majority of nodes have stored. Caller holds r.mu.
 func (r *Raft) advanceCommit() {
 	majority := (len(r.peers)+1)/2 + 1
-	for n := r.lastLogIndex(); n > r.commitIndex; n-- {
+	// Only consider entries that have been persisted: the commit index must
+	// never pass a write the fsync has not yet covered.
+	for n := r.persistedIndex; n > r.commitIndex; n-- {
 		// A leader only commits an entry by counting once it is from the
 		// leader's own term (a core Raft safety rule).
 		if r.termAt(n) != r.currentTerm {
