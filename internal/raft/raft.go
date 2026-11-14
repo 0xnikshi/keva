@@ -168,6 +168,35 @@ func (r *Raft) becomeFollower(term uint64) {
 	r.notifyCommitWaiters() // wake writers waiting on commit; they must re-check
 }
 
+// Status is a point-in-time snapshot of a node's observable Raft state, for
+// operators and health checks.
+type Status struct {
+	ID           string `json:"id"`
+	Role         string `json:"role"`
+	Term         uint64 `json:"term"`
+	LeaderID     string `json:"leader_id"`
+	CommitIndex  uint64 `json:"commit_index"`
+	LastApplied  uint64 `json:"last_applied"`
+	LastLogIndex uint64 `json:"last_log_index"`
+	Members      int    `json:"members"`
+}
+
+// Status returns a consistent snapshot of the node's current Raft state.
+func (r *Raft) Status() Status {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Status{
+		ID:           r.id,
+		Role:         r.state.String(),
+		Term:         r.currentTerm,
+		LeaderID:     r.leaderID,
+		CommitIndex:  r.commitIndex,
+		LastApplied:  r.lastApplied,
+		LastLogIndex: r.lastLogIndex(),
+		Members:      len(r.members),
+	}
+}
+
 // Leader returns the ID of the leader this node currently recognizes, or
 // "" if none is known.
 func (r *Raft) Leader() string {

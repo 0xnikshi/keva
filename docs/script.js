@@ -100,6 +100,7 @@ const CHAPTERS = [
     sections: [
       { id: "c8-durable-ack", label: "Durable Acknowledgment" },
       { id: "c8-backpressure", label: "Request Limits & Backpressure" },
+      { id: "c8-observability", label: "Observability" },
     ],
   },
 ];

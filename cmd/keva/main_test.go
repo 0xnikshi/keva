@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/0xnikshi/keva/internal/keva"
+	"github.com/0xnikshi/keva/internal/raft"
 	"github.com/0xnikshi/keva/internal/server"
 	"github.com/0xnikshi/keva/internal/store"
 )
@@ -28,6 +29,7 @@ func (applyProposer) AwaitCommit(context.Context, uint64) error { return nil }
 func (applyProposer) ReadIndex() (uint64, error)                { return 1, nil }
 func (applyProposer) Leader() string                            { return "n1" }
 func (applyProposer) IsLeader() bool                            { return true }
+func (applyProposer) Status() raft.Status                       { return raft.Status{ID: "n1", Role: "leader"} }
 
 func testClient(t *testing.T) *client {
 	t.Helper()

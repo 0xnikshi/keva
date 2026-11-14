@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/0xnikshi/keva/internal/api"
@@ -26,6 +27,7 @@ type Proposer interface {
 	ReadIndex() (uint64, error)                          // confirm leadership for a linearizable read
 	Leader() string                                      // ID of the current leader, "" if unknown
 	IsLeader() bool
+	Status() raft.Status // observable Raft state for the status endpoint
 }
 
 // commitTimeout bounds how long a write waits for its entry to commit before
@@ -36,11 +38,22 @@ const commitTimeout = 5 * time.Second
 // forwarded to the leader when this node is a follower); reads are served
 // from the local store (the replicated state machine).
 type Server struct {
-	raft   Proposer
-	store  store.Store
-	peers  map[string]string // peer ID → base URL, for forwarding to the leader
-	client *http.Client
-	sem    chan struct{} // bounds in-flight client requests (backpressure)
+	raft    Proposer
+	store   store.Store
+	peers   map[string]string // peer ID → base URL, for forwarding to the leader
+	client  *http.Client
+	sem     chan struct{} // bounds in-flight client requests (backpressure)
+	metrics metrics
+}
+
+// metrics counts client activity for the status endpoint. The fields are
+// touched from many request goroutines, so they are atomic.
+type metrics struct {
+	reads      atomic.Int64
+	writes     atomic.Int64
+	deletes    atomic.Int64
+	forwarded  atomic.Int64
+	overloaded atomic.Int64
 }
 
 // maxInflight caps concurrent client requests a node will serve at once.
@@ -66,14 +79,20 @@ func NewWithLimit(p Proposer, s store.Store, peers map[string]string, inflight i
 	}
 }
 
-// Handler builds the HTTP routes and returns the root handler, wrapped in the
-// in-flight limiter and request-logging middleware.
+// Handler builds the HTTP routes and returns the root handler. The key-value
+// API is gated by the in-flight limiter; the status endpoint is not, so a node
+// stays observable even while it is shedding load. Everything is wrapped in the
+// request-logging middleware.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/kv/{key}", s.handleGet)
-	mux.HandleFunc("PUT /v1/kv/{key}", s.handlePut)
-	mux.HandleFunc("DELETE /v1/kv/{key}", s.handleDelete)
-	return logging(s.limit(mux))
+	kv := http.NewServeMux()
+	kv.HandleFunc("GET /v1/kv/{key}", s.handleGet)
+	kv.HandleFunc("PUT /v1/kv/{key}", s.handlePut)
+	kv.HandleFunc("DELETE /v1/kv/{key}", s.handleDelete)
+
+	root := http.NewServeMux()
+	root.Handle("/v1/kv/", s.limit(kv))
+	root.HandleFunc("GET /v1/status", s.handleStatus)
+	return logging(root)
 }
 
 // limit sheds load once maxInflight requests are already in flight: it tries
@@ -87,13 +106,46 @@ func (s *Server) limit(next http.Handler) http.Handler {
 			defer func() { <-s.sem }()
 			next.ServeHTTP(w, r)
 		default:
+			s.metrics.overloaded.Add(1)
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, "server overloaded")
 		}
 	})
 }
 
+// handleStatus reports this node's Raft state and request counters. It is not
+// gated by the limiter, so it answers even when the node is shedding load.
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, statusResponse{
+		Node: s.raft.Status(),
+		Requests: requestCounts{
+			Reads:      s.metrics.reads.Load(),
+			Writes:     s.metrics.writes.Load(),
+			Deletes:    s.metrics.deletes.Load(),
+			Forwarded:  s.metrics.forwarded.Load(),
+			Overloaded: s.metrics.overloaded.Load(),
+		},
+		Inflight: len(s.sem),
+	})
+}
+
+// statusResponse is the body of GET /v1/status.
+type statusResponse struct {
+	Node     raft.Status   `json:"node"`
+	Requests requestCounts `json:"requests"`
+	Inflight int           `json:"inflight"`
+}
+
+type requestCounts struct {
+	Reads      int64 `json:"reads"`
+	Writes     int64 `json:"writes"`
+	Deletes    int64 `json:"deletes"`
+	Forwarded  int64 `json:"forwarded"`
+	Overloaded int64 `json:"overloaded"`
+}
+
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
+	s.metrics.reads.Add(1)
 	// Linearizable reads are served by the leader. Followers forward, and
 	// the leader confirms it still leads before reading its local store.
 	if !s.raft.IsLeader() {
@@ -120,6 +172,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
+	s.metrics.writes.Add(1)
 	if !s.raft.IsLeader() {
 		s.forwardToLeader(w, r)
 		return
@@ -153,6 +206,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	s.metrics.deletes.Add(1)
 	if !s.raft.IsLeader() {
 		s.forwardToLeader(w, r)
 		return
@@ -185,6 +239,7 @@ func (s *Server) awaitCommit(r *http.Request, index uint64) error {
 // response, so a client can write to any node. It returns 503 when no
 // leader is known.
 func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request) {
+	s.metrics.forwarded.Add(1)
 	leader := s.raft.Leader()
 	base, ok := s.peers[leader]
 	if leader == "" || !ok {

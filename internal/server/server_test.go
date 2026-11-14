@@ -40,6 +40,7 @@ func (directProposer) AwaitCommit(context.Context, uint64) error { return nil }
 func (directProposer) ReadIndex() (uint64, error)                { return 1, nil }
 func (directProposer) Leader() string                            { return "n1" }
 func (directProposer) IsLeader() bool                            { return true }
+func (directProposer) Status() raft.Status                       { return raft.Status{ID: "n1", Role: "leader"} }
 
 // notLeaderProposer always reports that this node is a follower with no
 // known leader.
@@ -50,6 +51,7 @@ func (notLeaderProposer) AwaitCommit(context.Context, uint64) error { return raf
 func (notLeaderProposer) ReadIndex() (uint64, error)                { return 0, raft.ErrNotLeader }
 func (notLeaderProposer) Leader() string                            { return "" }
 func (notLeaderProposer) IsLeader() bool                            { return false }
+func (notLeaderProposer) Status() raft.Status                       { return raft.Status{Role: "follower"} }
 
 func newTestServer() http.Handler {
 	mem := store.NewMemory()
@@ -77,6 +79,7 @@ func (p blockingProposer) AwaitCommit(ctx context.Context, _ uint64) error {
 func (blockingProposer) ReadIndex() (uint64, error) { return 1, nil }
 func (blockingProposer) Leader() string             { return "n1" }
 func (blockingProposer) IsLeader() bool             { return true }
+func (blockingProposer) Status() raft.Status        { return raft.Status{ID: "n1", Role: "leader"} }
 
 func do(t *testing.T, h http.Handler, method, target string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
@@ -238,4 +241,58 @@ func TestBackpressureShedsExcessLoad(t *testing.T) {
 	if got := <-aCode; got != http.StatusNoContent {
 		t.Errorf("released request status = %d, want 204", got)
 	}
+}
+
+func TestStatusReportsStateAndCounts(t *testing.T) {
+	h := newTestServer()
+	body, _ := json.Marshal(api.PutRequest{Value: []byte("1")})
+	do(t, h, http.MethodPut, "/v1/kv/a", body)
+	do(t, h, http.MethodGet, "/v1/kv/a", nil)
+	do(t, h, http.MethodDelete, "/v1/kv/a", nil)
+
+	w := do(t, h, http.MethodGet, "/v1/status", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", w.Code)
+	}
+	var resp statusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if resp.Node.Role != "leader" {
+		t.Errorf("node role = %q, want leader", resp.Node.Role)
+	}
+	if resp.Requests.Writes < 1 || resp.Requests.Reads < 1 || resp.Requests.Deletes < 1 {
+		t.Errorf("request counts = %+v, want >=1 read/write/delete", resp.Requests)
+	}
+}
+
+func TestStatusAvailableWhileOverloaded(t *testing.T) {
+	mem := store.NewMemory()
+	bp := blockingProposer{entered: make(chan struct{}), release: make(chan struct{})}
+	ts := httptest.NewServer(NewWithLimit(bp, mem, nil, 1).Handler())
+	defer ts.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/v1/kv/a", bytes.NewReader([]byte("{}")))
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-bp.entered // the only slot is now held
+
+	// The status endpoint is ungated, so it still answers.
+	resp, err := http.Get(ts.URL + "/v1/status")
+	if err != nil {
+		t.Fatalf("GET status: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status while overloaded = %d, want 200", resp.StatusCode)
+	}
+
+	close(bp.release)
+	<-done
 }

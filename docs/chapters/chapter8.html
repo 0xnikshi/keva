@@ -132,9 +132,47 @@ w.WriteHeader(http.StatusNoContent)   // now the write is durable</code></pre>
           slot frees and traffic flows again.
         </div>
 
+        <h3 id="c8-observability">Observability</h3>
+        <p>
+          Until now the only window into a running node was its log lines. To operate a cluster you
+          need to answer basic questions on demand: who is the leader, what term are we in, how far
+          has the log committed and applied, and how much traffic is this node taking. A single
+          <code>GET /v1/status</code> endpoint answers them, returning the node's Raft state
+          alongside request counters as JSON.
+        </p>
+        <pre><code>{
+  "node": { "id": "n1", "role": "leader", "term": 7,
+            "leader_id": "n1", "commit_index": 142, "last_applied": 142,
+            "last_log_index": 142, "members": 3 },
+  "requests": { "reads": 90, "writes": 50, "deletes": 2,
+                "forwarded": 0, "overloaded": 3 },
+  "inflight": 1
+}</code></pre>
+        <p>
+          The Raft state comes from a single locked snapshot, so the numbers are mutually
+          consistent. The counters are plain atomics bumped on each request path — reads, writes,
+          deletes, writes forwarded to the leader, and requests shed by the limiter — giving a cheap
+          picture of what the node is doing without a metrics dependency.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Observability — exposing the node's Raft state and request
-          metrics so an operator can see what the cluster is doing.
+          <span class="k">Observable under load.</span> The status route is deliberately
+          <em>outside</em> the in-flight limiter. A node is most interesting exactly when it is
+          overloaded or wedged — so the endpoint that tells you so must keep answering even while
+          every key-value request is being shed. <code>commit_index</code> versus
+          <code>last_applied</code>, and a climbing <code>overloaded</code> count, are how an
+          operator sees a stall as it happens.
+        </p>
+
+        <div class="callout">
+          <span class="k">Proven.</span> After a mix of operations the endpoint reports the correct
+          role and non-zero read/write/delete counts, and it still returns <code>200</code> while
+          the key-value API is saturated and shedding load.
+        </div>
+
+        <div class="callout">
+          <span class="k">Next.</span> Graceful lifecycle — draining in-flight requests and stepping
+          down cleanly on shutdown, so a rolling restart never drops acknowledged work.
         </div>
 
         <div class="page-nav">
