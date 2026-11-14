@@ -33,10 +33,7 @@ jobs:
         run: go build ./...
 
       - name: Test (race + coverage)
-        # -short skips the concurrent linearizability check, which can fail
-        # intermittently on a known stale-read-after-election window; run the
-        # full suite locally with `go test ./...`.
-        run: go test -short -race -coverprofile=coverage.out ./...
+        run: go test -race -coverprofile=coverage.out ./...
 
   lint:
     runs-on: ubuntu-latest

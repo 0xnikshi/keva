@@ -26,7 +26,7 @@ func (p applyProposer) Submit(cmd keva.Command) (uint64, error) {
 	return 1, nil
 }
 func (applyProposer) AwaitCommit(context.Context, uint64) error { return nil }
-func (applyProposer) ReadIndex() (uint64, error)                { return 1, nil }
+func (applyProposer) ReadIndex(context.Context) (uint64, error) { return 1, nil }
 func (applyProposer) Leader() string                            { return "n1" }
 func (applyProposer) IsLeader() bool                            { return true }
 func (applyProposer) Status() raft.Status                       { return raft.Status{ID: "n1", Role: "leader"} }

@@ -24,15 +24,16 @@ const maxBodySize = 1 << 20 // 1 MiB
 type Proposer interface {
 	Submit(cmd keva.Command) (uint64, error)
 	AwaitCommit(ctx context.Context, index uint64) error // block until the entry commits
-	ReadIndex() (uint64, error)                          // confirm leadership for a linearizable read
+	ReadIndex(ctx context.Context) (uint64, error)       // confirm leadership for a linearizable read
 	Leader() string                                      // ID of the current leader, "" if unknown
 	IsLeader() bool
 	Status() raft.Status // observable Raft state for the status endpoint
 }
 
-// commitTimeout bounds how long a write waits for its entry to commit before
-// the client gets a timeout, so a stalled cluster never hangs a request.
-const commitTimeout = 5 * time.Second
+// requestTimeout bounds how long a write waits for its entry to commit, or a
+// read waits for the leader to be confirmed, before the client gets a timeout
+// — so a stalled cluster never hangs a request.
+const requestTimeout = 5 * time.Second
 
 // Server serves the Keva HTTP API. Writes are proposed through Raft (and
 // forwarded to the leader when this node is a follower); reads are served
@@ -152,7 +153,9 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		s.forwardToLeader(w, r)
 		return
 	}
-	if _, err := s.raft.ReadIndex(); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+	if _, err := s.raft.ReadIndex(ctx); err != nil {
 		s.writeSubmitError(w, err)
 		return
 	}
@@ -230,7 +233,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 // client's request lifetime and commitTimeout — so a success response means
 // the write is durably replicated, not merely proposed.
 func (s *Server) awaitCommit(r *http.Request, index uint64) error {
-	ctx, cancel := context.WithTimeout(r.Context(), commitTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
 	defer cancel()
 	return s.raft.AwaitCommit(ctx, index)
 }

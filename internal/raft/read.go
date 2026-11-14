@@ -1,12 +1,22 @@
 package raft
 
-// ReadIndex confirms this node is still the leader by exchanging heartbeats
-// with a majority in the current term, then applies the state machine up to
-// the commit index captured at the start of the call and returns that index.
-// A read taken afterward reflects every write committed before the call — a
-// linearizable read. It returns ErrNotLeader if this node is not, or is no
-// longer, the leader.
-func (r *Raft) ReadIndex() (uint64, error) {
+import "context"
+
+// ReadIndex returns a commit index such that, once the state machine has
+// applied up to it, a read reflects every write committed before the call — a
+// linearizable read. It first waits for the read barrier (a current-term entry
+// must commit, so this node's commit index no longer lags a previous leader's
+// writes), then confirms it is still the leader by heartbeating a majority,
+// then applies up to the captured index. It returns ErrNotLeader if this node
+// is not, or is no longer, the leader, or ctx's error if the wait is cut short.
+func (r *Raft) ReadIndex(ctx context.Context) (uint64, error) {
+	// Raft §6.4: a newly elected leader's commit index can trail the true
+	// commit point until it commits an entry from its own term. Serving a read
+	// before then risks missing an already-acknowledged write.
+	if err := r.awaitReadBarrier(ctx); err != nil {
+		return 0, err
+	}
+
 	r.mu.Lock()
 	if r.state != Leader {
 		r.mu.Unlock()
@@ -37,6 +47,32 @@ func (r *Raft) ReadIndex() (uint64, error) {
 	// must reflect — a stale, non-linearizable read.
 	r.applyCommitted()
 	return readIdx, nil
+}
+
+// awaitReadBarrier blocks until a current-term entry (the election no-op) has
+// committed, so the commit index reflects the true commit point. It returns
+// early if the node stops leading or ctx is done.
+func (r *Raft) awaitReadBarrier(ctx context.Context) error {
+	for {
+		r.mu.Lock()
+		switch {
+		case r.state != Leader:
+			r.mu.Unlock()
+			return ErrNotLeader
+		case r.commitIndex >= r.readBarrier:
+			r.mu.Unlock()
+			return nil
+		}
+		wait := r.commitWait
+		r.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+			// Commit advanced or leadership changed; loop and re-check.
+		}
+	}
 }
 
 // confirmPeer heartbeats peer and reports whether it replied in a term no

@@ -170,6 +170,46 @@ w.WriteHeader(http.StatusNoContent)   // now the write is durable</code></pre>
           the key-value API is saturated and shedding load.
         </div>
 
+        <h3 id="c8-read-safety">Read Safety After an Election</h3>
+        <p>
+          Chapter 7's linearizability checker kept failing intermittently, and it was right to: it
+          had found a real stale read. A linearizable read is served at the leader's commit index —
+          but a <em>freshly elected</em> leader's commit index can trail the true commit point.
+          Until the new leader commits an entry from its own term, it cannot know how far the
+          previous leader had actually committed, so a read taken in that window can miss an
+          already-acknowledged write.
+        </p>
+
+        <div class="callout">
+          <span class="k">Why the window exists.</span> Commit index is volatile — rebuilt after a
+          restart or election, not carried over. A new leader only advances it by replicating a
+          current-term entry to a majority. Between winning the election and that first commit, its
+          commit index is whatever it happened to know as a follower, which may lag.
+        </div>
+
+        <h4>The read barrier</h4>
+        <p>
+          The fix is the rule from the Raft paper (§6.4): a leader must commit an entry from its
+          current term before serving reads. Keva already appends a no-op on election — now that
+          no-op doubles as a <b>read barrier</b>. <code>ReadIndex</code> waits for it to commit
+          (reusing the same commit-wait channel as durable writes, so there is no polling) before
+          confirming leadership and serving the read. The wait is bounded by the request's context,
+          so a leader that cannot make progress returns a timeout rather than hanging.
+        </p>
+        <pre><code>func (r *Raft) ReadIndex(ctx context.Context) (uint64, error) {
+    if err := r.awaitReadBarrier(ctx); err != nil {  // §6.4: current-term commit first
+        return 0, err
+    }
+    // ...confirm leadership by heartbeat, apply up to the read index, then serve...
+}</code></pre>
+
+        <div class="callout">
+          <span class="k">Proven.</span> A regression test elects a new leader whose no-op has not
+          yet committed and shows a read correctly blocks (and times out) instead of returning a
+          stale index — then succeeds once the no-op commits. Remove the barrier and the test fails,
+          confirming it guards the real bug.
+        </div>
+
         <div class="callout">
           <span class="k">Next.</span> Graceful lifecycle — draining in-flight requests and stepping
           down cleanly on shutdown, so a rolling restart never drops acknowledged work.

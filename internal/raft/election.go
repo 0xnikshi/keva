@@ -59,8 +59,12 @@ func (r *Raft) becomeLeader() {
 
 	// Append a no-op entry in the current term. Committing it advances the
 	// commit index past entries from earlier terms, so those entries are
-	// (re)applied — which is how a restarted cluster rebuilds its state.
-	r.log = append(r.log, keva.Entry{Term: r.currentTerm, Index: r.lastLogIndex() + 1})
+	// (re)applied — which is how a restarted cluster rebuilds its state — and
+	// it serves as the read barrier: reads wait for it to commit so they never
+	// observe a commit index that still lags a previous leader's writes.
+	noop := keva.Entry{Term: r.currentTerm, Index: r.lastLogIndex() + 1}
+	r.log = append(r.log, noop)
+	r.readBarrier = noop.Index
 	r.persist()
 
 	r.nextIndex = make(map[string]uint64, len(r.peers))

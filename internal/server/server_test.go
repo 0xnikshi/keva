@@ -37,7 +37,7 @@ func (p directProposer) Submit(cmd keva.Command) (uint64, error) {
 	return 1, nil
 }
 func (directProposer) AwaitCommit(context.Context, uint64) error { return nil }
-func (directProposer) ReadIndex() (uint64, error)                { return 1, nil }
+func (directProposer) ReadIndex(context.Context) (uint64, error) { return 1, nil }
 func (directProposer) Leader() string                            { return "n1" }
 func (directProposer) IsLeader() bool                            { return true }
 func (directProposer) Status() raft.Status                       { return raft.Status{ID: "n1", Role: "leader"} }
@@ -48,7 +48,7 @@ type notLeaderProposer struct{}
 
 func (notLeaderProposer) Submit(keva.Command) (uint64, error)       { return 0, raft.ErrNotLeader }
 func (notLeaderProposer) AwaitCommit(context.Context, uint64) error { return raft.ErrNotLeader }
-func (notLeaderProposer) ReadIndex() (uint64, error)                { return 0, raft.ErrNotLeader }
+func (notLeaderProposer) ReadIndex(context.Context) (uint64, error) { return 0, raft.ErrNotLeader }
 func (notLeaderProposer) Leader() string                            { return "" }
 func (notLeaderProposer) IsLeader() bool                            { return false }
 func (notLeaderProposer) Status() raft.Status                       { return raft.Status{Role: "follower"} }
@@ -76,10 +76,10 @@ func (p blockingProposer) AwaitCommit(ctx context.Context, _ uint64) error {
 		return ctx.Err()
 	}
 }
-func (blockingProposer) ReadIndex() (uint64, error) { return 1, nil }
-func (blockingProposer) Leader() string             { return "n1" }
-func (blockingProposer) IsLeader() bool             { return true }
-func (blockingProposer) Status() raft.Status        { return raft.Status{ID: "n1", Role: "leader"} }
+func (blockingProposer) ReadIndex(context.Context) (uint64, error) { return 1, nil }
+func (blockingProposer) Leader() string                            { return "n1" }
+func (blockingProposer) IsLeader() bool                            { return true }
+func (blockingProposer) Status() raft.Status                       { return raft.Status{ID: "n1", Role: "leader"} }
 
 func do(t *testing.T, h http.Handler, method, target string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()

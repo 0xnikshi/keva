@@ -59,6 +59,12 @@ type Raft struct {
 	nextIndex  map[string]uint64 // next log index to send to each peer
 	matchIndex map[string]uint64 // highest index known replicated on each peer
 
+	// readBarrier is the index of the no-op this node appended on becoming
+	// leader. Until it commits, a current-term entry has not yet committed and
+	// the commit index may lag the true commit point, so reads must wait for
+	// it (Raft §6.4) to avoid serving stale data after an election.
+	readBarrier uint64
+
 	// Run-loop timing and lifecycle.
 	baseTimeout       time.Duration
 	heartbeatInterval time.Duration

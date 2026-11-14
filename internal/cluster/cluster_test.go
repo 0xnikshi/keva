@@ -83,31 +83,53 @@ func waitForLeader(t *testing.T, nodes map[string]*harness, timeout time.Duratio
 	return ""
 }
 
+// retryable reports whether a status is a transient, retry-worthy response —
+// a node that is momentarily not the leader or cannot reach one, as happens
+// briefly during an election. A real client retries these, and so do the tests.
+func retryable(status int) bool {
+	return status == http.StatusServiceUnavailable || status == http.StatusBadGateway
+}
+
 func put(t *testing.T, base, key, value string) int {
 	t.Helper()
 	body, _ := json.Marshal(api.PutRequest{Value: []byte(value)})
-	req, _ := http.NewRequest(http.MethodPut, base+"/v1/kv/"+key, bytes.NewReader(body))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("PUT %s: %v", key, err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		req, _ := http.NewRequest(http.MethodPut, base+"/v1/kv/"+key, bytes.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT %s: %v", key, err)
+		}
+		status := resp.StatusCode
+		_ = resp.Body.Close()
+		if !retryable(status) || time.Now().After(deadline) {
+			return status
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	return resp.StatusCode
 }
 
 func get(t *testing.T, base, key string) (string, int) {
 	t.Helper()
-	resp, err := http.Get(base + "/v1/kv/" + key)
-	if err != nil {
-		t.Fatalf("GET %s: %v", key, err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(base + "/v1/kv/" + key)
+		if err != nil {
+			t.Fatalf("GET %s: %v", key, err)
+		}
+		if retryable(resp.StatusCode) && time.Now().Before(deadline) {
+			_ = resp.Body.Close()
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return "", resp.StatusCode
+		}
+		var vr api.ValueResponse
+		_ = json.NewDecoder(resp.Body).Decode(&vr)
+		return string(vr.Value), resp.StatusCode
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode
-	}
-	var vr api.ValueResponse
-	_ = json.NewDecoder(resp.Body).Decode(&vr)
-	return string(vr.Value), resp.StatusCode
 }
 
 // A node persists its Raft log, so a fresh instance on the same data file
