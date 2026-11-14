@@ -52,6 +52,15 @@ type InstallSnapshotReply struct {
 	Term uint64 // responder's term, for the leader to update itself
 }
 
+// TimeoutNowArgs holds the arguments for a TimeoutNow RPC, sent by a leader
+// that is stepping down to a chosen, up-to-date follower: it tells the
+// follower to start an election immediately instead of waiting out its
+// election timeout, so a new leader is in place with no serving gap.
+type TimeoutNowArgs struct {
+	Term     uint64 // leader's term
+	LeaderID string // the leader handing off
+}
+
 // Transport sends Raft RPCs to peer nodes, addressed by peer ID. It is an
 // interface so the consensus logic can be tested over an in-memory
 // transport, with no real network involved.
@@ -59,6 +68,7 @@ type Transport interface {
 	RequestVote(peer string, args RequestVoteArgs) (RequestVoteReply, error)
 	AppendEntries(peer string, args AppendEntriesArgs) (AppendEntriesReply, error)
 	InstallSnapshot(peer string, args InstallSnapshotArgs) (InstallSnapshotReply, error)
+	TimeoutNow(peer string, args TimeoutNowArgs) error
 	// SetPeers registers or updates peer addresses (id → URL), so a node can
 	// reach members added after startup through a configuration change.
 	SetPeers(peers map[string]string)

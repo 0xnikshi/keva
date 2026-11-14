@@ -56,6 +56,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	r.state = Leader
 	r.leaderID = r.id
+	r.transferring = false
 
 	// Append a no-op entry in the current term. Committing it advances the
 	// commit index past entries from earlier terms, so those entries are

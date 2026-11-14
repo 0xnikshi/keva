@@ -65,6 +65,11 @@ type Raft struct {
 	// it (Raft §6.4) to avoid serving stale data after an election.
 	readBarrier uint64
 
+	// transferring is set while this leader is handing off: it stops sending
+	// heartbeats so it will not reset the target follower's election timer
+	// after telling it to time out now.
+	transferring bool
+
 	// Run-loop timing and lifecycle.
 	baseTimeout       time.Duration
 	heartbeatInterval time.Duration
@@ -170,6 +175,7 @@ func (r *Raft) becomeFollower(term uint64) {
 	r.currentTerm = term
 	r.votedFor = ""
 	r.leaderID = "" // leader unknown until the next heartbeat
+	r.transferring = false
 	r.persist()
 	r.notifyCommitWaiters() // wake writers waiting on commit; they must re-check
 }

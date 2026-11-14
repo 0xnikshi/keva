@@ -88,6 +88,20 @@ func run() error {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 
+	// In-flight requests have drained while this node was still leader; now
+	// hand leadership to a follower so the cluster keeps a leader without
+	// waiting out an election timeout. Best effort — if it fails, the plain
+	// stop below still lets the survivors elect.
+	if node.IsLeader() {
+		transferCtx, tcancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := node.TransferLeadership(transferCtx); err != nil {
+			slog.Warn("leadership transfer skipped", "err", err)
+		} else {
+			slog.Info("leadership transferred before shutdown")
+		}
+		tcancel()
+	}
+
 	slog.Info("kevad stopped cleanly")
 	return nil
 }

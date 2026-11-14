@@ -53,8 +53,11 @@ func (r *Raft) run(interval time.Duration, stop <-chan struct{}) {
 func (r *Raft) tick() {
 	r.mu.Lock()
 	if r.state == Leader {
+		transferring := r.transferring
 		r.mu.Unlock()
-		r.replicate()
+		if !transferring { // stay silent during a handoff so the target times out
+			r.replicate()
+		}
 		return
 	}
 	timedOut := time.Since(r.lastContact) >= r.electionTimeout

@@ -2,6 +2,7 @@ package cluster_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -248,5 +249,41 @@ func TestClusterSurvivesLeaderFailure(t *testing.T) {
 		if code != http.StatusOK || got != "v2" {
 			t.Errorf("get from survivor %s = %q (%d), want v2 (200)", id, got, code)
 		}
+	}
+}
+
+// TestLeadershipTransfer shows graceful handoff: a leader transfers leadership
+// to a follower, and a new, different leader is in place promptly — the basis
+// for a no-gap rolling restart.
+func TestLeadershipTransfer(t *testing.T) {
+	nodes := startCluster(t, "n1", "n2", "n3")
+	leader := waitForLeader(t, nodes, 3*time.Second)
+	if leader == "" {
+		t.Fatal("no leader elected")
+	}
+
+	// A committed write ensures followers are caught up, so one is eligible
+	// to receive leadership.
+	if code := put(t, nodes[leader].ts.URL, "k", "v"); code != http.StatusNoContent {
+		t.Fatalf("seed write = %d, want 204", code)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := nodes[leader].node.TransferLeadership(ctx); err != nil {
+		t.Fatalf("transfer leadership: %v", err)
+	}
+
+	newLeader := waitForLeader(t, nodes, 2*time.Second)
+	if newLeader == "" {
+		t.Fatal("no leader after transfer")
+	}
+	if newLeader == leader {
+		t.Errorf("leadership stayed with %s; expected handoff to another node", leader)
+	}
+
+	// The new leader serves reads and still has the data.
+	if got, code := get(t, nodes[newLeader].ts.URL, "k"); code != http.StatusOK || got != "v" {
+		t.Errorf("read after transfer = %q (%d), want v (200)", got, code)
 	}
 }

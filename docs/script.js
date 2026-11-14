@@ -102,6 +102,7 @@ const CHAPTERS = [
       { id: "c8-backpressure", label: "Request Limits & Backpressure" },
       { id: "c8-observability", label: "Observability" },
       { id: "c8-read-safety", label: "Read Safety After an Election" },
+      { id: "c8-lifecycle", label: "Graceful Lifecycle" },
     ],
   },
 ];

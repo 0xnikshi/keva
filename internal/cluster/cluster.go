@@ -3,6 +3,7 @@
 package cluster
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -73,6 +74,13 @@ func (n *Node) Stop() { n.raft.Stop() }
 
 // IsLeader reports whether this node is currently the leader.
 func (n *Node) IsLeader() bool { return n.raft.IsLeader() }
+
+// TransferLeadership hands leadership to an up-to-date follower, returning once
+// this node has stepped down. Used on graceful shutdown so the cluster keeps a
+// leader without waiting out an election timeout.
+func (n *Node) TransferLeadership(ctx context.Context) error {
+	return n.raft.TransferLeadership(ctx)
+}
 
 // AddNode adds a member to the cluster. It must be called on the leader. The
 // address lets every node reach the new member once the change replicates.

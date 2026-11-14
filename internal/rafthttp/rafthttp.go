@@ -77,6 +77,13 @@ func (t *Transport) InstallSnapshot(peer string, args raft.InstallSnapshotArgs) 
 	return reply, err
 }
 
+// TimeoutNow sends a TimeoutNow RPC to peer, asking it to start an election
+// immediately as part of a leadership handoff.
+func (t *Transport) TimeoutNow(peer string, args raft.TimeoutNowArgs) error {
+	var reply struct{}
+	return t.post(peer, "/raft/timeoutnow", args, &reply)
+}
+
 func (t *Transport) post(peer, path string, args, reply any) error {
 	base, ok := t.peerURL(peer)
 	if !ok {
@@ -128,6 +135,16 @@ func Handler(node *raft.Raft) http.Handler {
 			return
 		}
 		writeJSON(w, node.InstallSnapshot(args))
+	})
+
+	mux.HandleFunc("POST /raft/timeoutnow", func(w http.ResponseWriter, r *http.Request) {
+		var args raft.TimeoutNowArgs
+		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		node.TimeoutNow(args)
+		writeJSON(w, struct{}{})
 	})
 
 	return mux

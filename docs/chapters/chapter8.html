@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-8">
         <p class="eyebrow">CHAPTER 8</p>
-        <h2 class="chapter-title">Hardening <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Hardening <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           Keva is correct; this chapter makes it <em>robust</em> — turning a system that works into
           one that behaves well when clients misbehave, the cluster stalls, or an operator needs to
@@ -210,9 +210,58 @@ w.WriteHeader(http.StatusNoContent)   // now the write is durable</code></pre>
           confirming it guards the real bug.
         </div>
 
+        <h3 id="c8-lifecycle">Graceful Lifecycle</h3>
+        <p>
+          Shutting a node down carelessly hurts the cluster in two ways: in-flight writes can be
+          dropped, and if the node was the leader, the others sit idle until an election timeout
+          elapses before electing a replacement — a serving gap on every restart. A graceful
+          shutdown closes both: drain in-flight work while still leader, then hand leadership off
+          deliberately.
+        </p>
+
+        <h4>Drain, then hand off</h4>
+        <p>
+          The daemon already stops accepting new connections and waits for active requests to finish
+          (<code>http.Server.Shutdown</code>) — and it does this <em>before</em> giving up
+          leadership, so in-flight writes commit normally rather than failing. Only then does it
+          transfer leadership and stop the Raft loop.
+        </p>
+        <pre><code>srv.Shutdown(ctx)              // stop new work, let in-flight writes commit
+if node.IsLeader() {
+    node.TransferLeadership(ctx)  // install a new leader before leaving
+}
+node.Stop()                    // halt the Raft loop</code></pre>
+
+        <h4>Leadership transfer</h4>
+        <p>
+          Rather than vanish and let the cluster discover the loss by timeout, the leader uses the
+          Raft handoff (§3.10). It brings a follower fully up to date, stops its own heartbeats so it
+          will not keep that follower's election timer alive, and sends a <b>TimeoutNow</b> RPC —
+          telling the follower to start an election immediately. Because that follower's log is
+          current, it wins at once, and the old leader steps down having confirmed a successor.
+        </p>
+        <pre><code>// On the departing leader:
+r.transferring = true                 // go silent so the target's timer fires
+r.transport.TimeoutNow(target, ...)   // "start your election now"
+// On the target follower:
+func (r *Raft) TimeoutNow(args) { r.electionTimeout = 0 }  // elect on next tick</code></pre>
+        <p>
+          The handoff only targets a follower that is fully caught up, so the new leader never lacks
+          a committed entry. If none qualifies, the node falls back to a plain stop and the
+          survivors elect the normal way — correct, just not seamless.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Graceful lifecycle — draining in-flight requests and stepping
-          down cleanly on shutdown, so a rolling restart never drops acknowledged work.
+          <span class="k">Proven.</span> A follower told to time out now wins on its next tick
+          without waiting its full timeout, and a stale-term TimeoutNow is ignored. End to end, a
+          leader transfers leadership and a different node is serving promptly, with the data intact.
+        </div>
+
+        <div class="callout">
+          <span class="k">Chapter complete.</span> Keva is now hardened for real operation: writes
+          are acknowledged only once durable, overload is shed instead of absorbed, the node is
+          observable even under stress, reads stay linearizable across elections, and shutdown hands
+          off cleanly. Next chapter: performance.
         </div>
 
         <div class="page-nav">

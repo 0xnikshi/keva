@@ -65,6 +65,15 @@ func (t *memTransport) InstallSnapshot(peer string, args InstallSnapshotArgs) (I
 	return n.InstallSnapshot(args), nil
 }
 
+func (t *memTransport) TimeoutNow(peer string, args TimeoutNowArgs) error {
+	n, ok := t.target(args.LeaderID, peer)
+	if !ok {
+		return fmt.Errorf("peer %q unreachable", peer)
+	}
+	n.TimeoutNow(args)
+	return nil
+}
+
 // SetPeers is a no-op: the in-memory transport already holds every node by ID.
 func (t *memTransport) SetPeers(map[string]string) {}
 
