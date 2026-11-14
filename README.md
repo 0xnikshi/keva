@@ -66,6 +66,13 @@ Inspect a node's state at any time:
 curl -s http://localhost:7070/v1/status
 ```
 
+Or run the whole thing — cluster, writes, a leader kill, and failover — as a
+single self-contained demo:
+
+```bash
+make demo
+```
+
 ## Architecture
 
 A write travels: **client → server → Raft (propose) → replicate to a majority →

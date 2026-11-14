@@ -2,7 +2,7 @@ BIN_DIR := bin
 PKGS    := ./...
 GO      := go
 
-.PHONY: all build build-daemon build-cli test test-race cover vet fmt fmt-check lint tidy clean help
+.PHONY: all build build-daemon build-cli demo test test-race cover vet fmt fmt-check lint tidy clean help
 
 all: build
 
@@ -14,6 +14,10 @@ build-daemon:
 
 build-cli:
 	$(GO) build -o $(BIN_DIR)/keva ./cmd/keva
+
+## demo: run the fault-tolerance demo (3-node cluster, then kill the leader)
+demo: build
+	@./scripts/demo.sh
 
 ## test: run the test suite
 test:
