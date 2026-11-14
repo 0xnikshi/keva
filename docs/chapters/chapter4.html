@@ -59,6 +59,15 @@
           The flow is <code>Follower → (timeout) → Candidate → (wins majority) → Leader</code>.
           A leader that sees a newer term steps back down to follower.
         </p>
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Follower
+    Follower --> Candidate: election timeout,<br/>no leader heard
+    Candidate --> Leader: wins a majority of votes
+    Candidate --> Candidate: split vote →<br/>new term, retry
+    Candidate --> Follower: another leader,<br/>or a higher term
+    Leader --> Follower: sees a higher term
+        </pre>
 
         <h3 id="c4-terms">Terms</h3>
         <p>
@@ -184,6 +193,26 @@ if canVote &amp;&amp; r.candidateLogUpToDate(args.LastLogIndex, args.LastLogTerm
           <b>committed</b> — safe forever. An <code>AppendEntries</code> with no entries is a
           <b>heartbeat</b> that keeps followers from starting elections.
         </p>
+        <pre class="mermaid">
+sequenceDiagram
+    participant C as Client
+    participant L as Leader
+    participant F1 as Follower 1
+    participant F2 as Follower 2
+    C->>L: write
+    L->>L: append to own log
+    par replicate
+        L->>F1: AppendEntries(entry)
+        L->>F2: AppendEntries(entry)
+    end
+    F1-->>L: ok
+    F2-->>L: ok
+    Note over L: majority stored → committed
+    L->>L: apply to state machine
+    L-->>C: acknowledged
+    L->>F1: next AppendEntries carries new commitIndex
+    L->>F2: next AppendEntries carries new commitIndex
+        </pre>
 
         <h4>The log-matching check</h4>
         <p>
@@ -339,5 +368,10 @@ type Storage interface {
   </main>
 </div>
 <script src="../script.js"></script>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+  const dark = document.documentElement.getAttribute("data-theme") !== "light";
+  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "default" });
+</script>
 </body>
 </html>
