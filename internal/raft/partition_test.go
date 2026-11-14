@@ -28,7 +28,7 @@ func (t *memTransport) heal() {
 
 // mesh builds a full-mesh cluster of the given IDs over one in-memory
 // transport, each node backed by a recording state machine.
-func mesh(t *testing.T, ids ...string) (map[string]*Raft, map[string]*snapSM) {
+func mesh(t testing.TB, ids ...string) (map[string]*Raft, map[string]*snapSM) {
 	t.Helper()
 	initial := make(map[string][]string, len(ids))
 	for _, id := range ids {
@@ -44,7 +44,7 @@ func mesh(t *testing.T, ids ...string) (map[string]*Raft, map[string]*snapSM) {
 }
 
 // commitPut submits a write on the leader and runs one replication round.
-func commitPut(t *testing.T, leader *Raft, k, v string) {
+func commitPut(t testing.TB, leader *Raft, k, v string) {
 	t.Helper()
 	if _, err := leader.Submit(keva.Command{Op: keva.OpPut, Key: keva.Key(k), Value: keva.Value(v)}); err != nil {
 		t.Fatalf("submit %s: %v", k, err)

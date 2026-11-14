@@ -17,7 +17,7 @@
     <div class="content">
       <section class="chapter" id="chapter-9">
         <p class="eyebrow">CHAPTER 9</p>
-        <h2 class="chapter-title">Performance <span class="pill wip">IN PROGRESS</span></h2>
+        <h2 class="chapter-title">Performance <span class="pill done">COMPLETE</span></h2>
         <p class="lead">
           Correct and hardened, Keva is now made fast. The theme is <em>amortization</em>: the
           costly steps of consensus — a round trip to a majority, an fsync — should be paid once for
@@ -108,9 +108,42 @@
           suites, still passes.
         </div>
 
+        <h3 id="c9-benchmarks">Benchmarks</h3>
+        <p>
+          Optimizations are worth only what they measure, so the gains are pinned down with Go
+          benchmarks: the raw store as a ceiling, and the replicated read and write paths both
+          serially and under concurrency. The consensus numbers use the in-memory transport, so
+          they isolate protocol overhead from disk and network.
+        </p>
+        <table>
+          <thead><tr><th>Benchmark</th><th>ns/op</th><th>What it shows</th></tr></thead>
+          <tbody>
+            <tr><td>Memory Put / Get</td><td>~80</td><td>the bare store — the ceiling consensus works below</td></tr>
+            <tr><td>Submit, serial</td><td>~21,000</td><td>one proposal's own round, nothing to batch</td></tr>
+            <tr><td>Submit, parallel</td><td>~10,000</td><td>concurrent proposals share rounds — ~2× the per-op throughput</td></tr>
+            <tr><td>ReadIndex, parallel</td><td>~420</td><td>batched confirmation makes reads cheap</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The headline is the serial-versus-parallel write gap: the same operation costs about half
+          as much per write once there is concurrency to coalesce, which is group commit earning its
+          place. Reads under concurrency are an order of magnitude cheaper still, since a batch of
+          them resolves against one confirmation round.
+        </p>
+
         <div class="callout">
-          <span class="k">Next.</span> Benchmarks — putting real numbers on read and write
-          throughput to anchor the showcase.
+          <span class="k">Honest framing.</span> These measure protocol overhead, not a production
+          deployment: the transport is in-memory and the store fits in RAM. Real fsync and network
+          latency dominate on real hardware — which is exactly why batching them matters, and why
+          the numbers that improve here are the ones that would hurt most there. Making persistence
+          itself cheaper (an append-only log instead of rewriting the whole state each flush) is the
+          natural next optimization.
+        </div>
+
+        <div class="callout">
+          <span class="k">Chapter complete.</span> Keva now amortizes the two costly steps of
+          consensus — the majority round trip and the fsync — across concurrent operations, with
+          benchmarks to prove it. Next chapter: the showcase.
         </div>
 
         <div class="page-nav">

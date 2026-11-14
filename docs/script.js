@@ -111,6 +111,7 @@ const CHAPTERS = [
     sections: [
       { id: "c9-read-batching", label: "Batched Reads" },
       { id: "c9-group-commit", label: "Group Commit" },
+      { id: "c9-benchmarks", label: "Benchmarks" },
     ],
   },
 ];

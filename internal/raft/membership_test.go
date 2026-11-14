@@ -10,7 +10,7 @@ import (
 // newMembers builds a cluster whose nodes start with the given initial peer
 // sets, all sharing one in-memory transport, each with a snapSM state machine.
 // Nodes not listed as anyone's peer (but present here) can be added later.
-func newMembers(t *testing.T, initial map[string][]string) (map[string]*Raft, map[string]*snapSM) {
+func newMembers(t testing.TB, initial map[string][]string) (map[string]*Raft, map[string]*snapSM) {
 	t.Helper()
 	tr := &memTransport{nodes: map[string]*Raft{}, down: map[string]bool{}}
 	nodes := make(map[string]*Raft, len(initial))
