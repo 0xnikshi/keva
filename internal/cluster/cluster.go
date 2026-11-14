@@ -75,6 +75,10 @@ func (n *Node) Stop() { n.raft.Stop() }
 // IsLeader reports whether this node is currently the leader.
 func (n *Node) IsLeader() bool { return n.raft.IsLeader() }
 
+// Status returns a snapshot of the node's Raft state, for health checks and
+// metrics.
+func (n *Node) Status() raft.Status { return n.raft.Status() }
+
 // TransferLeadership hands leadership to an up-to-date follower, returning once
 // this node has stepped down. Used on graceful shutdown so the cluster keeps a
 // leader without waiting out an election timeout.

@@ -1,0 +1,111 @@
+{
+  "uid": "keva-cluster",
+  "title": "Keva Cluster",
+  "tags": ["keva"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Raft leader (1 = leader)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "keva_raft_is_leader", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Raft term",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "keva_raft_term", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Commit vs applied index",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "keva_raft_commit_index", "legendFormat": "{{instance}} commit" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "keva_raft_last_applied", "legendFormat": "{{instance}} applied" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Server HTTP requests/sec by code",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (code) (rate(keva_http_requests_total[1m]))", "legendFormat": "{{code}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Server p95 latency by method",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le, method) (rate(keva_http_request_duration_seconds_bucket[5m])))", "legendFormat": "{{method}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Client ops/sec by outcome",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (outcome) (rate(kevaload_ops_total[1m]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Client errors/sec by op",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (op) (rate(kevaload_ops_total{outcome=\"error\"}[1m]))", "legendFormat": "{{op}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Client p95 latency by op",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum by (le, op) (rate(kevaload_op_duration_seconds_bucket[5m])))", "legendFormat": "{{op}}" }
+      ]
+    }
+  ]
+}

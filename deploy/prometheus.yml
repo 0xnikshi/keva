@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The three Keva nodes expose /metrics on their client port.
+  - job_name: keva
+    static_configs:
+      - targets: ["keva1:7070", "keva2:7070", "keva3:7070"]
+
+  # The load generator exposes client-observed metrics on its own port.
+  - job_name: kevaload
+    static_configs:
+      - targets: ["kevaload:9100"]

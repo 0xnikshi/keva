@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/0xnikshi/keva/internal/cluster"
+	"github.com/0xnikshi/keva/internal/metrics"
 )
 
 func main() {
@@ -56,9 +57,25 @@ func run() error {
 	node.Start()
 	defer node.Stop()
 
+	// Expose Prometheus metrics at /metrics and instrument the client/peer
+	// handler so request rate, latency, and response codes are recorded. The
+	// Raft-state collector reads node.Status() on each scrape.
+	m := metrics.New(func() metrics.RaftStats {
+		s := node.Status()
+		return metrics.RaftStats{
+			Term:        s.Term,
+			CommitIndex: s.CommitIndex,
+			LastApplied: s.LastApplied,
+			IsLeader:    s.Role == "leader",
+		}
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", m.Handler())
+	mux.Handle("/", m.InstrumentHandler(node.Handler()))
+
 	srv := &http.Server{
 		Addr:         *addr,
-		Handler:      node.Handler(),
+		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,

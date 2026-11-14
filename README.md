@@ -131,6 +131,31 @@ overhead, isolated from disk and network):
 make build && go test -run '^$' -bench . ./internal/raft/ ./internal/store/
 ```
 
+## Monitoring
+
+Each node exposes Prometheus metrics at `/metrics` — request rate, latency
+histograms, and live Raft state (term, commit vs. applied index, which node is
+leader). A one-command stack brings up a three-node cluster, a load generator,
+Prometheus, and a pre-provisioned Grafana dashboard:
+
+```bash
+make monitor        # docker compose up --build
+```
+
+- **Grafana** — <http://localhost:3000> (anonymous admin; the "Keva Cluster"
+  dashboard is provisioned automatically)
+- **Prometheus** — <http://localhost:9090>
+- **A node's raw metrics** — <http://localhost:7070/metrics>
+
+The load generator drives steady traffic so the dashboard is live. To watch a
+failover, stop the current leader and see a new one elected and the client
+error rate recover:
+
+```bash
+docker compose stop keva1   # whichever node is currently leader
+make monitor-down           # stop everything and clear volumes
+```
+
 ## Design docs
 
 The project was built and documented chapter by chapter, from the storage

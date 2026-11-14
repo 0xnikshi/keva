@@ -1,0 +1,7 @@
+.git
+bin
+data
+docs
+*.wal
+*.wal.compact
+coverage.out

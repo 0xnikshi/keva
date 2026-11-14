@@ -1,0 +1,65 @@
+name: keva
+
+# Shared config for the three Keva nodes: one image, built once, restarted on
+# exit. Each node overrides only its command below.
+x-keva: &keva
+  build: .
+  image: keva:local
+  restart: unless-stopped
+
+services:
+  keva1:
+    <<: *keva
+    container_name: keva1
+    command: ["kevad", "--id=keva1", "--addr=:7070", "--peers=keva2=keva2:7070,keva3=keva3:7070", "--data=/data"]
+    volumes: ["keva1-data:/data"]
+    ports: ["7070:7070"] # client API + /metrics, reachable from the host
+
+  keva2:
+    <<: *keva
+    container_name: keva2
+    command: ["kevad", "--id=keva2", "--addr=:7070", "--peers=keva1=keva1:7070,keva3=keva3:7070", "--data=/data"]
+    volumes: ["keva2-data:/data"]
+    ports: ["7071:7070"]
+
+  keva3:
+    <<: *keva
+    container_name: keva3
+    command: ["kevad", "--id=keva3", "--addr=:7070", "--peers=keva1=keva1:7070,keva2=keva2:7070", "--data=/data"]
+    volumes: ["keva3-data:/data"]
+    ports: ["7072:7070"]
+
+  kevaload:
+    <<: *keva
+    container_name: kevaload
+    command: ["kevaload", "--targets=http://keva1:7070,http://keva2:7070,http://keva3:7070", "--qps=80", "--metrics-addr=:9100"]
+    depends_on: [keva1, keva2, keva3]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+    depends_on: [keva1, keva2, keva3, kevaload]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      # Anonymous admin, no login — convenient for a local demo only.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+
+volumes:
+  keva1-data:
+  keva2-data:
+  keva3-data:

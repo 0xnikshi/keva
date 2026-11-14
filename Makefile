@@ -2,12 +2,12 @@ BIN_DIR := bin
 PKGS    := ./...
 GO      := go
 
-.PHONY: all build build-daemon build-cli demo test test-race cover vet fmt fmt-check lint tidy clean help
+.PHONY: all build build-daemon build-cli build-load demo monitor monitor-down test test-race cover vet fmt fmt-check lint tidy clean help
 
 all: build
 
-## build: compile both binaries into bin/
-build: build-daemon build-cli
+## build: compile all binaries into bin/
+build: build-daemon build-cli build-load
 
 build-daemon:
 	$(GO) build -o $(BIN_DIR)/kevad ./cmd/kevad
@@ -15,9 +15,20 @@ build-daemon:
 build-cli:
 	$(GO) build -o $(BIN_DIR)/keva ./cmd/keva
 
+build-load:
+	$(GO) build -o $(BIN_DIR)/kevaload ./cmd/kevaload
+
 ## demo: run the fault-tolerance demo (3-node cluster, then kill the leader)
 demo: build
 	@./scripts/demo.sh
+
+## monitor: run the full stack — cluster + load gen + Prometheus + Grafana
+monitor:
+	docker compose up --build
+
+## monitor-down: stop the stack and remove its volumes
+monitor-down:
+	docker compose down -v
 
 ## test: run the test suite
 test:
