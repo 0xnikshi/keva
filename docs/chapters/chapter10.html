@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ch. 10 · Showcase — Keva</title>
+<link rel="stylesheet" href="../style.css" />
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar"></aside>
+  <main>
+    <div class="topbar">
+      <span class="crumb">Keva / Design Docs / Chapter 10</span>
+      <button class="theme-btn" id="themeBtn">◐ Theme</button>
+    </div>
+    <div class="content">
+      <section class="chapter" id="chapter-10">
+        <p class="eyebrow">CHAPTER 10</p>
+        <h2 class="chapter-title">Showcase <span class="pill done">COMPLETE</span></h2>
+        <p class="lead">
+          Nine chapters in, Keva is a complete distributed key-value store: correct, fault
+          tolerant, operable, and fast. This last chapter steps back — what was built, how to run
+          it, and how it is shown to be right.
+        </p>
+
+        <h3 id="c10-journey">The journey</h3>
+        <p>
+          Each layer was made correct in isolation before the next was added — storage proven in
+          memory, then made durable, then replicated, then operated, then hardened, then tuned.
+        </p>
+        <table>
+          <thead><tr><th>Chapter</th><th>What it added</th></tr></thead>
+          <tbody>
+            <tr><td>1 · Foundation</td><td>Module, package layout, domain types, tooling, CI.</td></tr>
+            <tr><td>2 · Storage Engine</td><td>In-memory store, a write-ahead log, crash recovery, compaction.</td></tr>
+            <tr><td>3–4 · Raft Consensus</td><td>Elections, log replication, persistence, the autonomous run loop.</td></tr>
+            <tr><td>5 · Replicated KV</td><td>Store as a Raft state machine, HTTP transport, leader forwarding, linearizable reads.</td></tr>
+            <tr><td>6 · Cluster Operations</td><td>Snapshotting, InstallSnapshot catch-up, dynamic membership.</td></tr>
+            <tr><td>7 · Correctness Under Failure</td><td>Partition safety, an invariant checker, a linearizability checker, randomized chaos.</td></tr>
+            <tr><td>8 · Hardening</td><td>Durable acks with deadlines, backpressure, a status endpoint, read safety, graceful lifecycle.</td></tr>
+            <tr><td>9 · Performance</td><td>Batched reads, group-commit writes, benchmarks.</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="c10-run">Running it</h3>
+        <p>
+          Two binaries: <code>kevad</code> (the daemon) and <code>keva</code> (the client). Build
+          them, start three nodes, and write to any one — a follower forwards to the leader, and
+          every node reads back the same value.
+        </p>
+        <pre><code>make build
+./bin/kevad --id n1 --addr :7070 --peers n2=localhost:7071,n3=localhost:7072 --data ./data/n1
+# ...n2 and n3 likewise...
+./bin/keva --addr http://localhost:7070 put city pune
+./bin/keva --addr http://localhost:7071 get city      # -> pune, from any node</code></pre>
+        <p>
+          The whole fault-tolerance story — cluster up, a write, a leader killed, a new leader
+          elected, still serving — runs as one self-contained command:
+        </p>
+        <pre><code>make demo</code></pre>
+
+        <h3 id="c10-evidence">How it is shown to be right</h3>
+        <p>
+          Keva is not just asserted to be correct; it is checked as an adversary would attack it,
+          all under the race detector. A linearizability checker verifies that concurrent client
+          histories could have come from a single consistent register. A safety-invariant checker
+          confirms, after every step, that no two leaders share a term, that logs match, and that
+          committed entries never diverge. A randomized chaos suite throws partitions, elections,
+          crashes, and snapshots at the cluster and asserts nothing committed is ever lost. Each
+          checker is itself fed a hand-built violation, so a silent pass means something.
+        </p>
+        <p>
+          And it is fast where it counts: the two costly steps of consensus — the majority round
+          trip and the fsync — are amortized across concurrent operations, with benchmarks to show
+          it. The full feature list, quickstart, and numbers live in the
+          <a href="https://github.com/0xnikshi/keva">project README</a>.
+        </p>
+
+        <div class="callout">
+          <span class="k">What it is.</span> A fault-tolerant, strongly consistent, Raft-backed
+          key-value store — writes replicate through consensus, reads are linearizable, clients
+          talk to any node, the cluster reshapes its own membership and survives failures, and all
+          of it is proven under chaos and tuned for throughput.
+        </div>
+
+        <div class="callout">
+          <span class="k">Where it could go next.</span> An append-only persistence log instead of
+          rewriting state each flush; follower reads for workloads that tolerate bounded staleness;
+          multi-key transactions; and a deterministic network simulator to fold the linearizability
+          and invariant checkers into one harness. The core is done — these are the next climbs.
+        </div>
+
+        <div class="page-nav">
+          <a href="chapter9.html"><span class="nav-dir">← Previous</span>Ch. 9 — Performance</a>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="../script.js"></script>
+</body>
+</html>
