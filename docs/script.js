@@ -114,6 +114,15 @@ const CHAPTERS = [
       { id: "c9-benchmarks", label: "Benchmarks" },
     ],
   },
+  {
+    label: "Ch. 10 — Showcase",
+    page: "chapters/chapter10.html",
+    sections: [
+      { id: "c10-journey", label: "The Journey" },
+      { id: "c10-run", label: "Running It" },
+      { id: "c10-evidence", label: "How It's Shown Correct" },
+    ],
+  },
 ];
 
 const CHEVRON =
