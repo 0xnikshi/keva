@@ -32,15 +32,18 @@ reachable.
 | `cmd/kevad`        | Server daemon.                                             |
 | `cmd/keva`         | Command-line client.                                      |
 
-## Request flow (target design)
+## Request flow
 
 A write travels: client → `server` → `raft` (propose) → replicate to a
-majority → commit → each node's `store` applies the committed command.
-Reads are served with a linearizable guarantee rather than reading local
-state directly.
+majority → commit → each node's `store` applies the committed command. A
+write is acknowledged only once it has committed. Reads go through the
+leader's ReadIndex confirmation, so they reflect every acknowledged write
+rather than reading possibly-stale local state.
 
 ## Status
 
-Phase 0 — project foundation and scaffolding. Package boundaries and the
-domain types are in place; the engine, consensus, and network layers are
-stubs to be implemented in subsequent phases.
+Complete. The storage engine, Raft consensus, replicated KV, cluster
+operations (snapshots, dynamic membership), correctness testing, operational
+hardening, and performance work are all in place. The design is documented
+chapter by chapter in [`docs/`](docs/); see [README.md](README.md) for a
+feature overview, quickstart, and benchmarks.
