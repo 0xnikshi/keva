@@ -1,0 +1,17 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Keva">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#g)"/>
+  <!-- key: ring + stem + two bits, evoking a key-value store -->
+  <g fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="48" cy="52" r="18"/>
+    <path d="M60 64 L92 96"/>
+    <path d="M80 84 L70 94"/>
+    <path d="M92 96 L82 106"/>
+  </g>
+  <circle cx="48" cy="52" r="6" fill="#ffffff"/>
+</svg>

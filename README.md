@@ -1,10 +1,22 @@
+<div align="center">
+
+<img src="docs/assets/keva-logo.svg" width="96" height="96" alt="Keva logo" />
+
 # Keva
 
-A distributed, strongly consistent key-value store in Go, built on the Raft
-consensus algorithm. Keva replicates every write through consensus, serves
-linearizable reads, survives node and network failures, and reshapes its own
-cluster membership while running — and it is verified the way distributed
-systems have to be: under partitions, crashes, and randomized chaos.
+**A distributed, strongly consistent key-value store in Go, built on Raft.**
+
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![Consensus](https://img.shields.io/badge/consensus-Raft-4f46e5)
+![Tested](https://img.shields.io/badge/tested-race%20%7C%20chaos%20%7C%20linearizability-14b8a6)
+![Status](https://img.shields.io/badge/status-feature%20complete-success)
+
+</div>
+
+Keva replicates every write through consensus, serves linearizable reads,
+survives node and network failures, and reshapes its own cluster membership
+while running — and it is verified the way distributed systems have to be:
+under partitions, crashes, and randomized chaos.
 
 Keva was built chapter by chapter as a study in distributed systems; the full
 design walkthrough lives in [`docs/`](docs/) (and is published as a reading
@@ -75,11 +87,53 @@ make demo
 
 ## Architecture
 
-A write travels: **client → server → Raft (propose) → replicate to a majority →
-commit → each node's store applies it**. Reads go through the leader's ReadIndex
-confirmation so they reflect every acknowledged write. A single `cluster.Node`
-wires the pieces together behind one HTTP handler serving the client API
-(`/v1`) and the peer RPC API (`/raft`).
+A single `cluster.Node` wires the pieces together behind one HTTP handler
+serving the client API (`/v1`), the peer RPC API (`/raft`), and `/metrics`.
+
+```mermaid
+flowchart TB
+    client([client])
+    subgraph node["cluster.Node"]
+        server["server<br/>/v1 client API"]
+        rafthttp["rafthttp<br/>/raft peer RPCs"]
+        raft["raft<br/>election · replication · snapshots"]
+        fsm["fsm"]
+        store[("store<br/>+ write-ahead log")]
+    end
+    peers[("other nodes")]
+
+    client -->|put / get / delete| server
+    server -->|propose write / ReadIndex| raft
+    raft --> fsm --> store
+    raft <-->|AppendEntries · RequestVote| rafthttp
+    rafthttp <-->|over HTTP| peers
+```
+
+### Request flow
+
+A write is acknowledged only after it commits; a read is confirmed by the
+leader before it is served.
+
+```mermaid
+flowchart LR
+    subgraph W["Write path"]
+        direction LR
+        w1([PUT]) --> w2{leader?}
+        w2 -->|no| w3[forward to leader] --> w4
+        w2 -->|yes| w4[raft.Submit]
+        w4 --> w5[replicate to majority]
+        w5 --> w6[commit]
+        w6 --> w7[apply to store]
+        w7 --> w8([204 after commit])
+    end
+    subgraph R["Read path"]
+        direction LR
+        r1([GET]) --> r2[ReadIndex:<br/>confirm leadership]
+        r2 --> r3[apply up to read index]
+        r3 --> r4[read local store]
+        r4 --> r5([value])
+    end
+```
 
 | Package            | Responsibility                                               |
 | ------------------ | ------------------------------------------------------------ |
