@@ -1,10 +1,11 @@
 package raft
 
 // ReadIndex confirms this node is still the leader by exchanging heartbeats
-// with a majority in the current term, then returns the commit index at the
-// time of the call. Once the state machine has applied up to that index, a
-// read reflects every write committed before the call — a linearizable read.
-// It returns ErrNotLeader if this node is not, or is no longer, the leader.
+// with a majority in the current term, then applies the state machine up to
+// the commit index captured at the start of the call and returns that index.
+// A read taken afterward reflects every write committed before the call — a
+// linearizable read. It returns ErrNotLeader if this node is not, or is no
+// longer, the leader.
 func (r *Raft) ReadIndex() (uint64, error) {
 	r.mu.Lock()
 	if r.state != Leader {
@@ -29,6 +30,12 @@ func (r *Raft) ReadIndex() (uint64, error) {
 	if acks < majority {
 		return 0, ErrNotLeader
 	}
+
+	// Ensure the state machine has applied everything committed as of readIdx
+	// before the caller reads it. Without this, a read can land in the window
+	// between an entry being committed and being applied, and miss a write it
+	// must reflect — a stale, non-linearizable read.
+	r.applyCommitted()
 	return readIdx, nil
 }
 

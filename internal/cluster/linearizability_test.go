@@ -130,6 +130,7 @@ func TestLinearizableUnderConcurrency(t *testing.T) {
 	var clock int64 // logical clock: a strict, tie-free real-time order
 
 	histories := make([][]operation, clients)
+	errs := make([]error, clients)
 	var wg sync.WaitGroup
 	for c := 0; c < clients; c++ {
 		wg.Add(1)
@@ -146,15 +147,25 @@ func TestLinearizableUnderConcurrency(t *testing.T) {
 					seq++
 					val := fmt.Sprintf("c%d-%d", c, seq)
 					call := atomic.AddInt64(&clock, 1)
-					retryPut(t, base, key, val)
+					if err := retryPut(base, key, val); err != nil {
+						errs[c] = err
+						return
+					}
 					hist = append(hist, operation{opPut, key, val, true, call, atomic.AddInt64(&clock, 1)})
 				case r < 9: // read
 					call := atomic.AddInt64(&clock, 1)
-					val, present := retryGet(t, base, key)
+					val, present, err := retryGet(base, key)
+					if err != nil {
+						errs[c] = err
+						return
+					}
 					hist = append(hist, operation{opGet, key, val, present, call, atomic.AddInt64(&clock, 1)})
 				default: // delete
 					call := atomic.AddInt64(&clock, 1)
-					retryDelete(t, base, key)
+					if err := retryDelete(base, key); err != nil {
+						errs[c] = err
+						return
+					}
 					hist = append(hist, operation{opDelete, key, "", false, call, atomic.AddInt64(&clock, 1)})
 				}
 			}
@@ -162,6 +173,12 @@ func TestLinearizableUnderConcurrency(t *testing.T) {
 		}(c)
 	}
 	wg.Wait()
+
+	for c, err := range errs {
+		if err != nil {
+			t.Fatalf("client %d: %v", c, err)
+		}
+	}
 
 	// Keys are independent registers, so linearizability holds iff each key's
 	// sub-history does.
@@ -203,12 +220,15 @@ func TestLinearizabilityCheckerHasTeeth(t *testing.T) {
 	}
 }
 
-func retryPut(t *testing.T, base, key, value string) {
-	t.Helper()
+// httpClient bounds each attempt so a request to a momentarily wedged node
+// fails fast and is retried elsewhere, rather than blocking the whole run.
+var httpClient = &http.Client{Timeout: 2 * time.Second}
+
+func retryPut(base, key, value string) error {
 	body, _ := json.Marshal(api.PutRequest{Value: []byte(value)})
-	retryUntil(t, "PUT "+key, func() bool {
+	return retryUntil("PUT "+key, func() bool {
 		req, _ := http.NewRequest(http.MethodPut, base+"/v1/kv/"+key, bytes.NewReader(body))
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return false
 		}
@@ -217,11 +237,10 @@ func retryPut(t *testing.T, base, key, value string) {
 	})
 }
 
-func retryDelete(t *testing.T, base, key string) {
-	t.Helper()
-	retryUntil(t, "DELETE "+key, func() bool {
+func retryDelete(base, key string) error {
+	return retryUntil("DELETE "+key, func() bool {
 		req, _ := http.NewRequest(http.MethodDelete, base+"/v1/kv/"+key, nil)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return false
 		}
@@ -230,11 +249,10 @@ func retryDelete(t *testing.T, base, key string) {
 	})
 }
 
-func retryGet(t *testing.T, base, key string) (value string, present bool) {
-	t.Helper()
-	retryUntil(t, "GET "+key, func() bool {
-		resp, err := http.Get(base + "/v1/kv/" + key)
-		if err != nil {
+func retryGet(base, key string) (value string, present bool, err error) {
+	err = retryUntil("GET "+key, func() bool {
+		resp, e := httpClient.Get(base + "/v1/kv/" + key)
+		if e != nil {
 			return false
 		}
 		defer func() { _ = resp.Body.Close() }()
@@ -251,20 +269,21 @@ func retryGet(t *testing.T, base, key string) (value string, present bool) {
 			return false
 		}
 	})
-	return value, present
+	return value, present, err
 }
 
 // retryUntil calls do until it reports success, so a transient non-leader
-// response never leaves an ambiguous operation in the recorded history.
-func retryUntil(t *testing.T, what string, do func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+// response never leaves an ambiguous operation in the recorded history. It
+// returns an error instead of failing the test, so it is safe to call from a
+// client goroutine (t.Fatalf must only be used on the test's own goroutine).
+func retryUntil(what string, do func() bool) error {
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if do() {
-			return
+			return nil
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%s did not succeed before deadline", what)
+			return fmt.Errorf("%s did not succeed before deadline", what)
 		}
 		time.Sleep(3 * time.Millisecond)
 	}
